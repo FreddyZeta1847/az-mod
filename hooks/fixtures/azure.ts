@@ -8,6 +8,7 @@
  *   carries an `env` column with a secret, as if a careless query leaked it: it must
  *   never reach a card, a file or the state).
  * - RESOURCE_LIST: what `az resource list` answers for the whole subscription.
+ * - COST_DEMO_SUITE: the Cost Management answer (this month and last month by resource).
  * - azAnswer(argv): a process.run answer for every az call the mod is allowed to make.
  * Owned by the main session; the children read it and never edit it.
  */
@@ -107,6 +108,26 @@ export const RESOURCE_LIST: ListRow[] = [
   list('rg-other', 'microsoft.app/containerapps', 'other-api'),
 ]
 
+/**
+ * Cost Management answer for demo-suite (the test clock is in November 2025): this month for
+ * every Container App and the storage, last month for two of them; app-match costs more than
+ * 1.5 × last month (a cost spike). Everything else is free (no row).
+ */
+const COST_ROW = (cost: number, month: '2025-11' | '2025-10', name: string): unknown[] =>
+  [cost, `${month}-01T00:00:00`, (DEMO_SUITE_ROWS.find(r => r.name === name) as GraphRow).id, 'EUR']
+export const COST_DEMO_SUITE = {
+  properties: {
+    columns: ['Cost', 'BillingMonth', 'ResourceId', 'Currency'].map(name => ({ name, type: 'String' })),
+    rows: [
+      COST_ROW(30, '2025-11', 'app-control'), COST_ROW(28, '2025-10', 'app-control'),
+      COST_ROW(12, '2025-11', 'app-flow'),
+      COST_ROW(40, '2025-11', 'app-match'), COST_ROW(20, '2025-10', 'app-match'),
+      COST_ROW(1.5, '2025-11', 'stdemosuite'),
+    ],
+    nextLink: null,
+  },
+}
+
 /** Static site of the bottega-web project: its repository matches that project's git remote. */
 export const BOTTEGA_REMOTE = 'https://github.com/example/bottega-web'
 
@@ -123,6 +144,7 @@ export const azAnswer = (argv: readonly string[]): ProcessRunResult => {
   if (a === 'account' && b === 'show') return ok({ id: SUB.id, name: SUB.name })
   // The query body travels in a file (`--body @<path>`): the test world checks it names the group.
   if (a === 'rest' && argv.some(x => x.includes('Microsoft.ResourceGraph/resources'))) return ok(GRAPH_DEMO_SUITE)
+  if (a === 'rest' && argv.some(x => x.includes('Microsoft.CostManagement/query'))) return ok(COST_DEMO_SUITE)
   if (a === 'resource' && b === 'list') return ok(RESOURCE_LIST)
   if (a === 'resource' && b === 'show') {
     const id = argv[argv.indexOf('--ids') + 1]?.toLowerCase()

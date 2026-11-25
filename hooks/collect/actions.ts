@@ -1,7 +1,7 @@
 /*
  * actions.ts — what Raccolta does, as plain `function name($, ...)` declarations (the
  * engine refuses $ passed to object methods or arrow functions): boot at session start,
- * Scan, Update, refresh one resource, the rule changes behind the pane's button keys,
+ * Scan, Update, refresh one resource, the month's costs, the rule changes behind the pane's button keys,
  * the «+ Aggiungi» search, and the 30 s timer of the automatic Update.
  * No action ever throws to its caller: the outcome lands in state (busy, health, cache,
  * rules, suggestions, found). Every rules change goes through saveRules (backup first).
@@ -10,6 +10,7 @@ import { atom, read, update as change } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 
 import { currentSubscription, runAz } from './az'
+import { costBody, costDue, costLoop, costUrl, parseCost } from './cost'
 import type { AzRun } from './az'
 import { graphRows, inScope, linkRegistries, markGone, readOne, readProject } from './graph'
 import { resolveProject } from './project'
@@ -17,7 +18,7 @@ import { cacheForSubscription, loop, noteError, noteSuccess, resume, shouldRefre
 import { addGroupTo, dismissIn, excludeIn, includeIn, isGroupId, rankSearch, removeGroupFrom, restoreIn } from './rules-ops'
 import { projectFiles, scanCandidates } from './scan'
 import type { ScanRow } from './scan'
-import { emptyRules, loadCache, loadRules, readSavedRules, resetRules as writeReset, saveCache, saveRules, takeLease } from './store'
+import { dataDir, emptyRules, loadCache, loadRules, readSavedRules, resetRules as writeReset, saveCache, saveRules, takeLease } from './store'
 import { groupIdOf, PANE, parseKey } from '../contract'
 import type { PaneAction } from '../contract'
 import type { AzBusy, AzCache, AzCard, AzEvent, AzHealth, AzId, AzRules, AzSuggestion } from '../../types'
@@ -288,6 +289,43 @@ async function refreshOne($: EngineInterface, id: AzId): Promise<void> {
   }
 }
 
+/**
+ * The month's costs of every card (twice a day, or now with the button): one Cost Management
+ * query for the groups plus the resources included from elsewhere. A refusal waits on its own
+ * memory (Retry-After, else 30 min throttled / 60 min otherwise) and never touches the state loop.
+ */
+async function readCosts($: EngineInterface, force = false): Promise<void> {
+  const [project, rules, cache, busy] = await Promise.all([read($, projectAtom), read($, rulesAtom), read($, cacheAtom), read($, busyAtom)])
+  if (project === null || rules === null || cache === null || busy.cost) return
+  const now = await $.clock.now()
+  if (!force && (!costDue(now, cache.costAt) || now < costLoop.backoffUntil)) return
+  const groupNames = Object.keys(rules.groups).map(g => g.slice(g.lastIndexOf('/') + 1))
+  const ids = Object.keys(rules.includes).filter(id => !(groupIdOf(id) in rules.groups))
+  if (groupNames.length === 0 && ids.length === 0) return
+  await setBusy($, { cost: true })
+  try {
+    // one body file per project: the query changes every time, a hashed name would pile files up
+    const bodyPath = `${await dataDir($)}/${project.key}.cost-query.json`
+    await $.fs.write(bodyPath, JSON.stringify(costBody(groupNames, ids, now)))
+    const r = await runAz($, ['rest', '--method', 'post', '--url', costUrl(cache.subscription.id), '--body', `@${bodyPath}`])
+    const latest = (await read($, cacheAtom)) ?? cache
+    if (!r.ok) {
+      costLoop.backoffUntil = r.error.retryAt ?? now + (r.error.code === 'throttled' ? 30 : 60) * 60_000
+      return await setCache($, { ...latest, errors: { ...latest.errors, cost: r.error } })
+    }
+    costLoop.backoffUntil = 0
+    const costs = parseCost(r.json, now)
+    const resources = Object.fromEntries(Object.entries(latest.resources)
+      .map(([id, card]) => [id, { ...card, cost: costs.byId[id] ?? { month: 0, prevMonth: null } }]))
+    const { cost: _old, ...errors } = latest.errors
+    await setCache($, { ...latest, resources, errors, cost: { currency: costs.currency, ...costs.total }, costAt: now })
+  } catch {
+    // shortcut: an unexpected failure only skips this read; the next tick or press tries again
+  } finally {
+    await setBusy($, { cost: false })
+  }
+}
+
 /** Takes a group's cards out of the photo (but those included one by one). */
 async function dropGroupCards($: EngineInterface, groupId: string, rules: AzRules): Promise<void> {
   // the «Uso rg-x» line goes even when there is no photo yet (the first read failed)
@@ -434,6 +472,7 @@ async function runKey($: EngineInterface, action: PaneAction, arg: string | unde
     if (action === 'scan') return await scanProject($)
     if (action === 'reset-rules') return await startOver($)
     if (action === 'undo-auto') return await undoAuto($)
+    if (action === 'refresh-cost') return await readCosts($, true)
     if (arg === undefined) return
     if (action === 'refresh') return await refreshOne($, arg)
     if (action === 'add') return await includeResource($, arg)
@@ -443,7 +482,7 @@ async function runKey($: EngineInterface, action: PaneAction, arg: string | unde
     if (action === 'dismiss') return await dismissSuggestion($, arg)
     if (action === 'add-group') return await addGroup($, arg)
     if (action === 'remove-group') return await removeGroup($, arg)
-    // 'open' (details on demand) and 'refresh-cost' arrive with later stages
+    // 'open' (details on demand) arrives with the activities
   } catch {
     // shortcut: an action never throws to the pane; its outcome (or none) is in state
   }
@@ -466,6 +505,8 @@ async function tick($: EngineInterface): Promise<void> {
   if ((await read($, rulesAtom)) !== null || (await read($, healthAtom)).rulesMode !== 'ok') await savedRules($)
   const now = await $.clock.now()
   const placed = (await $.ui.panes()).some(p => p.id === PANE && p.isPlaced)
+  // costs ride the same tick but not its rhythm: only the session that reads Azure, twice a day
+  if (placed && (await read($, healthAtom)).isLeaseHolder) void readCosts($)
   let cache = await read($, cacheAtom)
   const disk = await loadCache($, project.key)
   if (disk !== null && (disk.stateAt ?? 0) > (cache?.stateAt ?? 0)) {
@@ -489,6 +530,7 @@ async function tick($: EngineInterface): Promise<void> {
 async function startLoop($: EngineInterface): Promise<void> {
   loop.cancel?.()
   loop.startedAt = await $.clock.now()
+  costLoop.backoffUntil = 0
   loop.cancel = $.clock.every(TICK_MS, () => { void tick($).catch(() => undefined) }).cancel
 }
 

@@ -1,12 +1,16 @@
 /*
  * cost.test.ts — tests of the cost reading (letter A of «Costi, attività e avvisi»): the
  * Cost Management query and its answer (cost.ts, pure), then the reading through the whole
- * mod over world.ts (twice a day, the button, an Azure refusal that never stops the rest).
+ * mod over world.ts (twice a day, an Azure refusal that never stops the rest, resources
+ * added from another group). The cost button is tested with the pane (extras.test.tsx).
  */
 import { expect, test } from 'claude-code/testing'
 
 import { costBody, costDue, parseCost } from './cost'
-import { NOW } from './world'
+import { NOW, result, ROOT, startWorld } from './world'
+import type { World } from './world'
+import { DEMO_SUITE_ROWS, rid, SUB } from '../fixtures/azure'
+import type { AzRules } from '../../types'
 
 const R1 = '/subscriptions/0/resourcegroups/rg-demo-suite/providers/microsoft.app/containerapps/app-control'
 const R2 = '/subscriptions/0/resourcegroups/rg-demo-suite/providers/microsoft.storage/storageaccounts/stdemo'
@@ -73,4 +77,83 @@ test('costDue twice a day', async () => {
   expect(costDue(NOW, undefined)).toBe(true)
   expect(costDue(NOW, NOW - 11 * 3_600_000)).toBe(false)
   expect(costDue(NOW, NOW - 12 * 3_600_000)).toBe(true)
+})
+
+// ---------------------------------------------------------------- A2 through the mod
+
+const isCost = (a: string[]): boolean => a[1] === 'rest' && a.some(x => x.includes('Microsoft.CostManagement/query'))
+const isGraph = (a: string[]): boolean => a[1] === 'rest' && a.some(x => x.includes('Microsoft.ResourceGraph/resources'))
+const costCalls = (w: World): number => w.runs.filter(isCost).length
+const idOf = (name: string): string => DEMO_SUITE_ROWS.find(r => r.name === name)?.id as string
+
+test('costs are read once and kept on every card', async ($, on) => {
+  const w = startWorld(on)
+  await w.start($)
+  await w.clock.advance(30_000)
+  await w.waitFor(() => w.seen.cache?.costAt !== undefined && w.idle())
+  expect(costCalls(w)).toBe(1)
+  const cache = w.seen.cache
+  expect(cache?.cost).toEqual({ currency: 'EUR', month: 83.5, prevMonth: 48 })
+  expect(cache?.resources[idOf('app-match')]?.cost).toEqual({ month: 40, prevMonth: 20 })
+  expect(cache?.resources[idOf('kv-demo-suite')]?.cost).toEqual({ month: 0, prevMonth: null })
+  expect(Object.values(cache?.resources ?? {}).every(c => c.cost !== undefined)).toBe(true)
+})
+
+/** A saved photo whose costs were read `hoursAgo` hours before the test clock. */
+const photoWithCosts = (hoursAgo: number): Record<string, string> => ({
+  '/data/projects/demo-suite.cache.json': JSON.stringify({
+    schemaVersion: 1, projectKey: 'demo-suite', subscription: SUB, groups: {}, resources: {}, activity: [], errors: {},
+    cost: { currency: 'EUR', month: 1, prevMonth: null }, costAt: NOW - hoursAgo * 3_600_000,
+  }),
+})
+
+test('costs wait twelve hours', async ($, on) => {
+  const w = startWorld(on, { files: photoWithCosts(11) })
+  await w.start($)
+  await w.clock.advance(30_000)
+  await w.pause(50)
+  expect(costCalls(w)).toBe(0)
+  expect(w.seen.cache?.cost?.month).toBe(1)
+})
+
+test('costs older than twelve hours are read again', async ($, on) => {
+  const w = startWorld(on, { files: photoWithCosts(12) })
+  await w.start($)
+  await w.clock.advance(30_000)
+  await w.waitFor(() => costCalls(w) === 1 && w.idle())
+})
+
+test('a cost 429 never stops the state update', async ($, on) => {
+  const w = startWorld(on, { az: a => (isCost(a) ? result(1, '', 'ERROR: (429) Too many requests. Retry-After: 60') : undefined) })
+  await w.start($)
+  await w.clock.advance(30_000)
+  await w.waitFor(() => w.seen.cache?.errors.cost !== undefined && w.idle())
+  expect(w.seen.cache?.errors.cost?.code).toBe('throttled')
+  expect(w.seen.health?.az).toBe('ok')
+  w.runs.length = 0
+  await w.clock.advance(30_000)
+  await w.pause(50)
+  expect(costCalls(w)).toBe(0)
+  await w.clock.advance(120_000)
+  await w.waitFor(() => w.runs.some(isGraph) && costCalls(w) >= 1)
+})
+
+test('costs of a resource added from another group are asked by id', async ($, on) => {
+  const other = rid('rg-other', 'microsoft.app/containerapps', 'other-api')
+  const saved: AzRules = {
+    schemaVersion: 1, project: { key: 'demo-suite', mainRoot: ROOT, remote: null },
+    groups: { [idOf('app-control').split('/providers/')[0] as string]: { at: 1 } }, includes: { [other]: { at: 1 } },
+    excludes: {}, dismissed: {}, updatedAt: 1,
+  }
+  const w = startWorld(on, { files: { '/data/projects/demo-suite.rules.json': JSON.stringify(saved) } })
+  // saved rules: no first Scan, the first read of Azure waits for the first tick
+  await $.session.start({ cwd: ROOT, surface: 'desktop', isInteractive: true })
+  await w.clock.advance(30_000)
+  await w.waitFor(() => Object.keys(w.seen.cache?.resources ?? {}).length > 0 && w.idle())
+  await w.clock.advance(30_000)
+  await w.waitFor(() => costCalls(w) === 1 && w.idle())
+  const body = [...w.files.entries()].find(([k]) => k.includes('cost'))?.[1] ?? ''
+  expect(body.includes('"ResourceId"')).toBe(true)
+  expect(body.includes(other)).toBe(true)
+  expect(body.includes('rg-demo-suite')).toBe(true)
 })
