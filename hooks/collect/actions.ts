@@ -305,11 +305,15 @@ export async function startOver($: EngineInterface): Promise<void> {
 
 /** «+ Aggiungi»: ranks the last resource list read (reads one when there is none) and publishes it in `found`. */
 export async function search($: EngineInterface, text: string): Promise<void> {
-  if (mem.lastList.length === 0 && !(await readList($))) return
-  const project = await read($, projectAtom)
-  const touched = (await read($, eventsAtom)).map(e => e.name).filter((n): n is string => n !== undefined)
-  const found = rankSearch(mem.lastList, text, { key: project?.key ?? '', touched, rules: await read($, rulesAtom) })
-  await change($, foundAtom, () => found)
+  try {
+    if (mem.lastList.length === 0 && !(await readList($))) return
+    const project = await read($, projectAtom)
+    const touched = (await read($, eventsAtom)).map(e => e.name).filter((n): n is string => n !== undefined)
+    const found = rankSearch(mem.lastList, text, { key: project?.key ?? '', touched, rules: await read($, rulesAtom) })
+    await change($, foundAtom, () => found)
+  } catch {
+    // shortcut: a failed search leaves the last results; typing again retries
+  }
 }
 
 // ---------------------------------------------------------------- hook support
