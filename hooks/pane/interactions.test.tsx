@@ -8,7 +8,7 @@
 import type { On } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
 
-import type { AzUi } from '../../types'
+import type { AzCard, AzUi } from '../../types'
 import { DEMO_SUITE_ROWS, gid } from '../fixtures/azure'
 import { cache, DEMO, demoCards, demoState, idOf, NOW, PANE, rules, seed } from './seed'
 
@@ -20,7 +20,7 @@ const EXCLUDED = idOf('log-demo-suite')
 const richState = (): Record<string, unknown> => {
   const cards = demoCards()
   const watcher = `${DEMO}/providers/microsoft.network/networkwatchers/nw-demo`
-  cards[watcher] = { ...(cards[idOf('kv-demo-suite')] as never), id: watcher, name: 'nw-demo', type: 'microsoft.network/networkwatchers', autoCreated: true }
+  cards[watcher] = { ...(cards[idOf('kv-demo-suite')] as AzCard), id: watcher, name: 'nw-demo', type: 'microsoft.network/networkwatchers', autoCreated: true }
   return {
     ...demoState(),
     rules: rules({ groups: { [DEMO]: { at: NOW }, [OTHER]: { at: NOW } }, excludes: { [EXCLUDED]: { at: NOW } } }),
