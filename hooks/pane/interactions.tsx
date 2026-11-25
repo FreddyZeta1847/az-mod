@@ -26,7 +26,12 @@ export function handlers($: EngineInterface, setUi: (change: (u: AzUi) => Partia
     press: async (): Promise<void> => setUi(() => ({})),
     toggle: (flag: Flag) => async (): Promise<void> => setUi(u => ({ [flag]: !u[flag] })),
     /** Opens a row or closes the open one. */
-    toggleCard: (id: AzId) => async (): Promise<void> => setUi(u => ({ openCard: u.openCard === id ? null : id })),
+    toggleCard: (id: AzId, isOpen: boolean) => async (): Promise<void> => setUi(u => {
+      const others = (u.closed ?? []).filter(x => x !== id)
+      return isOpen
+        ? { openCard: u.openCard === id ? null : u.openCard, closed: [...others, id] }
+        : { openCard: id, closed: others }
+    }),
     copy: (text: string) => async (press: UiPressArgument): Promise<void> => {
       await setUi(() => ({}))
       await $.ui.copy({ text, surface: press.surface })

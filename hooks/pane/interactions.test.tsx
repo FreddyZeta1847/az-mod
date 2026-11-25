@@ -61,6 +61,10 @@ const EXPECTED: Record<string, ReturnType<typeof parseKey>> = {
   [`remove-group-${DEMO}`]: { action: 'remove-group', arg: DEMO },
   [`refresh-${idOf('app-control')}`]: { action: 'refresh', arg: idOf('app-control') },
   [`exclude-${idOf('app-control')}`]: { action: 'exclude', arg: idOf('app-control') },
+  // app-flow is failed, so its row is open by itself and draws its buttons too
+  [`refresh-${idOf('app-flow')}`]: { action: 'refresh', arg: idOf('app-flow') },
+  [`exclude-${idOf('app-flow')}`]: { action: 'exclude', arg: idOf('app-flow') },
+  'copy-app-flow': null,
   [`restore-${EXCLUDED}`]: { action: 'restore', arg: EXCLUDED },
   [`add-${FOUND_ID}`]: { action: 'add', arg: FOUND_ID },
   [`add-group-${SUGGESTED}`]: { action: 'add-group', arg: SUGGESTED },
@@ -69,7 +73,7 @@ const EXPECTED: Record<string, ReturnType<typeof parseKey>> = {
 }
 
 test('every drawn key asks Raccolta for the right action', async ($, on) => {
-  seed(on, { ...richState(), found: FOUND, ui: { isVisible: true, lastInputAt: 0, openCard: idOf('app-control'), showAuto: false, showHidden: true, isAdding: true } })
+  seed(on, { ...richState(), found: FOUND, ui: { isVisible: true, lastInputAt: 0, openCard: idOf('app-control'), closed: [], showAuto: false, showHidden: true, isAdding: true } })
   for (const surface of ['desktop', 'terminal'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
     const buttons = await ui.findAll({ type: 'Button' })
@@ -98,7 +102,29 @@ test('a row opens with its details and closes', async ($, on) => {
 
   await ui.press({ key: 'open-app-control' })
   expect(writes.at(-1)?.openCard).toBeNull()
-  expect(await ui.find({ text: /Apri nel portale/ })).toBeUndefined()
+  // app-control's details are gone (app-flow, failed, keeps its own open)
+  expect((await ui.find({ key: 'open-app-control' }))?.text).toBe('▸ app-control')
+  expect(await ui.find({ key: `refresh-${idOf('app-control')}` })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a failed row opens by itself, and stays closed once closed', async ($, on) => {
+  seed(on, demoState())
+  const writes = watchUi(on)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+
+  // app-flow is failed: open without a press, an ok row stays closed
+  expect((await ui.find({ key: 'open-app-flow' }))?.text).toBe('▾ app-flow')
+  expect((await ui.find({ key: 'open-app-control' }))?.text).toBe('▸ app-control')
+  expect(await ui.find({ key: `refresh-${idOf('app-flow')}` })).toBeDefined()
+
+  await ui.press({ key: 'open-app-flow' })
+  expect(writes.at(-1)?.closed).toContain(idOf('app-flow'))
+  expect((await ui.find({ key: 'open-app-flow' }))?.text).toBe('▸ app-flow')
+
+  await ui.press({ key: 'open-app-flow' })
+  expect(writes.at(-1)?.closed).not.toContain(idOf('app-flow'))
+  expect((await ui.find({ key: 'open-app-flow' }))?.text).toBe('▾ app-flow')
   await ui.unmount()
 })
 

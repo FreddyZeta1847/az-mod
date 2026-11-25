@@ -107,7 +107,8 @@ export type AzHealth = {
   nextAutoAt: Ms | null
   rulesMode: 'ok' | 'read-only' | 'broken'
 }
-export type AzUi = { isVisible: boolean; lastInputAt: Ms; openCard: AzId | null; showAuto: boolean; showHidden: boolean; isAdding: boolean }
+/** `closed`: rows the user closed this session (a failed row is open unless listed here). */
+export type AzUi = { isVisible: boolean; lastInputAt: Ms; openCard: AzId | null; closed: AzId[]; showAuto: boolean; showHidden: boolean; isAdding: boolean }
 export type AzAutoAdded = { groupId: AzGroupId; count: number } | null
 
 declare module 'claude-code' {

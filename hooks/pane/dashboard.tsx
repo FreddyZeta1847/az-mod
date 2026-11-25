@@ -28,7 +28,7 @@ const healthAtom = atom({ plugin: 'az-mod', key: 'health' } as const,
   { az: 'ok', isLeaseHolder: false, nextAutoAt: null, rulesMode: 'ok' }, { shape: 'health-1' })
 const foundAtom = atom({ plugin: 'az-mod', key: 'found' } as const, [], { shape: 'found-1' })
 const uiAtom = atom({ plugin: 'az-mod', key: 'ui' } as const,
-  { isVisible: false, lastInputAt: 0, openCard: null, showAuto: false, showHidden: false, isAdding: false }, { shape: 'ui-1' })
+  { isVisible: false, lastInputAt: 0, openCard: null, closed: [], showAuto: false, showHidden: false, isAdding: false }, { shape: 'ui-1' })
 import { dot, statusDonut, typeIcon } from './svg'
 import { C, FACT_LABELS, STATUS, STATUS_ORDER, TYPE_ORDER, ago, factsOf, keyFact, nameFromId, typeStyle } from './theme'
 
@@ -187,12 +187,13 @@ export async function drawDashboard($: EngineInterface, e: RenderInput<'Pane'>) 
     </Box>
   )
   const row = (c: AzCard) => {
-    const isOpen = ui.openCard === c.id
+    // a failed row is open by itself until the user closes it (decision «Quali informazioni in più mostrare»)
+    const isOpen = ui.openCard === c.id || (c.status === 'failed' && !(ui.closed ?? []).includes(c.id))
     return (
       <Box key={`row-${c.id}`} flexDirection="column" paddingX={1} backgroundColor={isOpen ? C.surface2 : C.bg} hover={{ backgroundColor: C.surface2 }}>
         <Box flexDirection="row" alignItems="center" gap={1}>
           {statusMark(busy.ids.includes(c.id) ? 'busy' : c.status)}
-          <Button key={keyFor('open', c.name)} label={`${isOpen ? '▾' : '▸'} ${c.name}`} plain onPress={act.toggleCard(c.id)} />
+          <Button key={keyFor('open', c.name)} label={`${isOpen ? '▾' : '▸'} ${c.name}`} plain onPress={act.toggleCard(c.id, isOpen)} />
           <Box flexGrow={1}>
             <Text color={c.status === 'failed' ? STATUS.failed.color : C.muted} wrap="truncate-end">{keyFact(c)}</Text>
           </Box>

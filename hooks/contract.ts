@@ -26,7 +26,7 @@ export const healthAtom = atom({ plugin: 'az-mod', key: 'health' } as const,
   { az: 'ok', isLeaseHolder: false, nextAutoAt: null, rulesMode: 'ok' }, { shape: 'health-1' })
 export const foundAtom = atom({ plugin: 'az-mod', key: 'found' } as const, [], { shape: 'found-1' })
 export const uiAtom = atom({ plugin: 'az-mod', key: 'ui' } as const,
-  { isVisible: false, lastInputAt: 0, openCard: null, showAuto: false, showHidden: false, isAdding: false }, { shape: 'ui-1' })
+  { isVisible: false, lastInputAt: 0, openCard: null, closed: [], showAuto: false, showHidden: false, isAdding: false }, { shape: 'ui-1' })
 
 /** Which facts each resource type shows (keys of lowercase ARM types). Raccolta reads them, the pane labels them. */
 export const FACTS_BY_TYPE: Record<string, AzFactKey[]> = {
