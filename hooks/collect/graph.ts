@@ -28,7 +28,8 @@ const COLUMNS: Record<keyof GraphRow, string> = {
   runningStatus: 'tostring(properties.runningStatus)', state: 'tostring(properties.state)',
   provisioningState: 'tostring(properties.provisioningState)',
   latestRevisionName: 'tostring(properties.latestRevisionName)', latestReadyRevisionName: 'tostring(properties.latestReadyRevisionName)',
-  url: 'tostring(coalesce(properties.configuration.ingress.fqdn, properties.defaultHostName, properties.loginServer))',
+  // static sites spell it defaultHostname, App Service defaultHostName (property names are case-sensitive)
+  url: 'tostring(coalesce(properties.configuration.ingress.fqdn, properties.defaultHostName, properties.defaultHostname, properties.loginServer))',
   image: `tostring(${C0}.image)`, cpu: `toreal(${C0}.resources.cpu)`, memory: `tostring(${C0}.resources.memory)`,
   minReplicas: 'toint(properties.template.scale.minReplicas)', maxReplicas: 'toint(properties.template.scale.maxReplicas)',
   revisionMode: 'tostring(properties.configuration.activeRevisionsMode)',
@@ -51,7 +52,7 @@ export const SHOW_QUERY = `{${[
   'id:id', 'name:name', 'type:type', 'resourceGroup:resourceGroup', 'location:location', 'kind:kind', 'sku:sku.name',
   'runningStatus:properties.runningStatus', 'state:properties.state', 'provisioningState:properties.provisioningState',
   'latestRevisionName:properties.latestRevisionName', 'latestReadyRevisionName:properties.latestReadyRevisionName',
-  'url:properties.configuration.ingress.fqdn || properties.defaultHostName || properties.loginServer',
+  'url:properties.configuration.ingress.fqdn || properties.defaultHostName || properties.defaultHostname || properties.loginServer',
   'image:properties.template.containers[0].image',
   'cpu:properties.template.containers[0].resources.cpu', 'memory:properties.template.containers[0].resources.memory',
   'minReplicas:properties.template.scale.minReplicas', 'maxReplicas:properties.template.scale.maxReplicas',
@@ -77,7 +78,8 @@ export const buildQuery = (groupIds: string[], ids: AzId[]): string => {
   const groupId = "tolower(strcat('/subscriptions/', subscriptionId, '/resourcegroups/', resourceGroup))"
   const where = [g.length > 0 ? `${groupId} in (${list(g)})` : '', i.length > 0 ? `tolower(id) in (${list(i)})` : '']
     .filter(Boolean).join(' or ')
-  const project = Object.entries(COLUMNS).map(([k, v]) => `${k} = ${v}`).join(', ')
+  // names quoted: some columns are KQL keywords (`kind = kind` is a ParserFailure)
+  const project = Object.entries(COLUMNS).map(([k, v]) => `['${k}'] = ${v}`).join(', ')
   return `resources | where ${where || 'false'} | project ${project}`
 }
 
@@ -106,7 +108,9 @@ const statusOf = (r: GraphRow): AzStatus => {
   if (revisionFailed(r)) return 'failed'
   if (run !== null && /stopped|disabled/i.test(run)) return 'stopped'
   if (run !== null && /running|ready|online|active/i.test(run)) return 'ok'
-  return prov !== null && /^succeeded$/i.test(prov) ? 'ok' : 'unknown'
+  if (prov !== null && /^succeeded$/i.test(prov)) return 'ok'
+  // listed by Azure with no status field at all (static sites, identities): it exists and nothing is wrong
+  return prov === null && run === null ? 'ok' : 'unknown'
 }
 
 /** Where each fact comes from in a row. */
@@ -223,6 +227,8 @@ export async function graphRows($: EngineInterface, query: string, subId: string
 
 export async function readProject($: EngineInterface, rules: Scope, subId: string):
   Promise<{ ok: true; cards: Record<AzId, AzCard> } | Extract<AzRun, { ok: false }>> {
+  // nothing asked (a folder without a group): no call to Azure every two minutes
+  if (Object.keys(rules.groups).length === 0 && Object.keys(rules.includes).length === 0) return { ok: true, cards: {} }
   const r = await graphRows($, buildQuery(Object.keys(rules.groups), Object.keys(rules.includes)), subId)
   if (!r.ok) return r
   const now = await $.clock.now()

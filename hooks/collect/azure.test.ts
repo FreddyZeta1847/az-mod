@@ -57,7 +57,7 @@ test('demo suite gives 13 cards', async () => {
   const q = buildQuery([gid('rg-demo-suite')], ['/subscriptions/0/resourcegroups/rg-x/providers/a/b/c'])
   expect(q.includes(`'${gid('rg-demo-suite')}'`)).toBe(true)
   expect(/\bproperties\b(?!\.)/.test(q)).toBe(false)
-  for (const column of Object.keys(rowOf('app-control')).filter(k => k !== 'env')) expect(q.includes(`${column} =`) || q.includes(`, ${column},`) || q.includes(` ${column},`)).toBe(true)
+  for (const column of Object.keys(rowOf('app-control')).filter(k => k !== 'env')) expect(q.includes(`['${column}'] =`)).toBe(true)
   const cards = DEMO_SUITE_ROWS.map(r => rowToCard(r, NOW, 'group'))
   expect(cards.length).toBe(13)
   expect(cards.every(c => c.id === c.id.toLowerCase() && c.type === c.type.toLowerCase())).toBe(true)
