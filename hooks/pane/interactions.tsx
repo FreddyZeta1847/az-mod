@@ -3,11 +3,10 @@
  * `ui` atom: every press stamps `ui.lastInputAt` (Raccolta slows the refresh after 30 min
  * without input); rows open and close (`openCard`); toggles show «Nascoste», the
  * Azure-created resources and the «+ Aggiungi» picker. The Azure side of a press
- * (update, scan, include…) is Raccolta's: it hooks the press by the Button's key, since
- * the engine refuses `$` passed to an AzActions method (contract under review: the keys
- * here are the ones fixed in plan H1 — update, scan, open-<name>, refresh-<name>,
- * exclude-<id>, restore-<id>, remove-<groupId>, accept-<id>, dismiss-<id>, undo-auto,
- * reset-rules, add, add-search, add-<id>).
+ * (update, scan, add…) is Raccolta's: it hooks `ui.press` and reads the Button's key with
+ * contract.ts `parseKey`, so every Raccolta key here comes from `keyFor`. Pane-only keys
+ * (`show-auto`, `show-hidden`, `toggle-add`, `close-picker`, `copy-<name>`) parse to null.
+ * The picker's Input is SEARCH_INPUT; Raccolta answers it in the `found` state key.
  * Usage: `const act = handlers($, setUi)` inside a ui.render hook, then `onPress={act.press}`
  * (never name it `h`: JSX compiles to the global `h`).
  */
@@ -15,6 +14,7 @@ import type { Elements, EngineInterface, UiPressArgument } from 'claude-code'
 
 import type { AzId, AzSuggestion, AzUi } from '../../types'
 
+import { keyFor, SEARCH_INPUT } from '../contract'
 import { C } from './theme'
 
 type Flag = 'showAuto' | 'showHidden' | 'isAdding'
@@ -42,13 +42,13 @@ type Els = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button' | 'Input'>
 /** The «+ Aggiungi» picker: search field, one button per result, close. */
 export const picker = ({ Box, Text, Button, Input }: Els, act: Handlers, found: AzSuggestion[]) => (
   <Box key="picker" flexDirection="column" gap={1} borderStyle="round" borderColor={C.border} backgroundColor={C.surface} padding={1}>
-    <Input key="add-search" label="Cerca" placeholder="nome di una risorsa o di un gruppo" submitLabel="cerca" autoFocus onSubmit={act.search} />
+    <Input key={SEARCH_INPUT} label="Cerca" placeholder="nome di una risorsa o di un gruppo" submitLabel="cerca" autoFocus onSubmit={act.search} />
     {found.map(s => (
       <Box key={`found-${s.id}`} flexDirection="row" gap={1} alignItems="center">
-        <Button key={`add-${s.id}`} label={`+ ${s.name}`} plain onPress={act.add} />
+        <Button key={s.kind === 'group' ? keyFor('add-group', s.id) : keyFor('add', s.id)} label={`+ ${s.name}`} plain onPress={act.add} />
         <Text color={C.faint}>{s.kind === 'group' ? `gruppo${s.count === undefined ? '' : ` · ${s.count} risorse`}` : (s.type ?? '')}</Text>
       </Box>
     ))}
-    <Button key="add-close" label="Chiudi" plain onPress={act.toggle('isAdding')} />
+    <Button key="close-picker" label="Chiudi" plain onPress={act.toggle('isAdding')} />
   </Box>
 )

@@ -52,7 +52,7 @@ test('empty project', async ($, on) => {
   for (const surface of SURFACES) {
     const ui = await $.ui.mount({ ...PANE, surface })
     expect(await ui.find({ type: 'Text', text: /Nessun gruppo rg-demo-suite in Demo/ })).toBeDefined()
-    expect(await ui.find({ key: 'add' })).toBeDefined()
+    expect(await ui.find({ key: 'toggle-add' })).toBeDefined()
     expect(await ui.findAll({ type: 'Svg' })).toHaveLength(0)
     await ui.unmount()
   }

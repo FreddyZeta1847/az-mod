@@ -12,7 +12,7 @@ import type { EngineInterface, RenderChildren, RenderInput } from 'claude-code'
 
 import type { AzCard, AzStatus, AzSuggestion, AzUi } from '../../types'
 
-import { isHidden } from '../contract'
+import { isHidden, keyFor } from '../contract'
 import { handlers, picker } from './interactions'
 
 // The engine reads an atom only when it is declared in the file that reads it, so these
@@ -26,6 +26,7 @@ const busyAtom = atom({ plugin: 'az-mod', key: 'busy' } as const,
   { scan: false, update: false, cost: false, ids: [] }, { shape: 'busy-1' })
 const healthAtom = atom({ plugin: 'az-mod', key: 'health' } as const,
   { az: 'ok', isLeaseHolder: false, nextAutoAt: null, rulesMode: 'ok' }, { shape: 'health-1' })
+const foundAtom = atom({ plugin: 'az-mod', key: 'found' } as const, [], { shape: 'found-1' })
 const uiAtom = atom({ plugin: 'az-mod', key: 'ui' } as const,
   { isVisible: false, lastInputAt: 0, openCard: null, showAuto: false, showHidden: false, isAdding: false }, { shape: 'ui-1' })
 import { dot, statusDonut, typeIcon } from './svg'
@@ -62,9 +63,9 @@ export async function drawDashboard($: EngineInterface, e: RenderInput<'Pane'>) 
   const els = $.ui.resolve(e)
   const { Box, Text, Button, Link } = els
   const Svg = 'Svg' in els ? els.Svg : undefined
-  const [project, rules, cache, suggestions, autoAdded, busy, health, ui, now] = await Promise.all([
+  const [project, rules, cache, suggestions, autoAdded, busy, health, ui, now, found] = await Promise.all([
     read($, projectAtom), read($, rulesAtom), read($, cacheAtom), read($, suggestionsAtom), read($, autoAddedAtom),
-    read($, busyAtom), read($, healthAtom), read($, uiAtom), $.clock.now(),
+    read($, busyAtom), read($, healthAtom), read($, uiAtom), $.clock.now(), read($, foundAtom),
   ])
   const setUi = async (change: (u: AzUi) => Partial<AzUi>): Promise<void> => {
     const at = await $.clock.now()
@@ -102,9 +103,9 @@ export async function drawDashboard($: EngineInterface, e: RenderInput<'Pane'>) 
         <Text color={C.faint}>{[groupNames.join(', ') || 'nessun gruppo', cache?.subscription.name].filter(Boolean).join(' · ')}</Text>
       </Box>
       <Box flexDirection="row" gap={1}>
-        <Button key="update" label={busy.update ? 'Aggiorno…' : 'Update'} variant="primary" onPress={act.press} />
-        <Button key="scan" label={busy.scan ? 'Cerco…' : 'Scan'} onPress={act.press} />
-        <Button key="add" label="+ Aggiungi" onPress={act.toggle('isAdding')} />
+        <Button key={keyFor('update')} label={busy.update ? 'Aggiorno…' : 'Update'} variant="primary" onPress={act.press} />
+        <Button key={keyFor('scan')} label={busy.scan ? 'Cerco…' : 'Scan'} onPress={act.press} />
+        <Button key="toggle-add" label="+ Aggiungi" onPress={act.toggle('isAdding')} />
       </Box>
     </Box>
   )
@@ -116,7 +117,7 @@ export async function drawDashboard($: EngineInterface, e: RenderInput<'Pane'>) 
   if (health.rulesMode === 'read-only') banners.push(banner('b-ro', STATUS.busy.color, 'Le regole di questo progetto vengono da una versione più nuova della mod: le mostro ma non le modifico.'))
   if (health.rulesMode === 'broken') {
     banners.push(banner('b-broken', STATUS.failed.color, 'Le regole di questo progetto sono rovinate, anche la copia di riserva.',
-      <Button key="reset-rules" label="Riparti da zero (salvo il file rotto)" onPress={act.press} />))
+      <Button key={keyFor('reset-rules')} label="Riparti da zero (salvo il file rotto)" onPress={act.press} />))
   }
   if (project?.conflict === 'other-repo') banners.push(banner('b-conflict', STATUS.busy.color, `Un altro repository usa già il nome «${key}»: questo progetto ha un file di regole a parte.`))
   const stateAt = cache?.stateAt
@@ -128,7 +129,7 @@ export async function drawDashboard($: EngineInterface, e: RenderInput<'Pane'>) 
     banners.push(
       <Box key="b-auto" flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
         <Text color={C.muted}>Uso {name} ({autoAdded.count} risorse)</Text>
-        <Button key="undo-auto" label="Annulla" plain onPress={act.press} />
+        <Button key={keyFor('undo-auto')} label="Annulla" plain onPress={act.press} />
       </Box>,
     )
   }
@@ -141,8 +142,8 @@ export async function drawDashboard($: EngineInterface, e: RenderInput<'Pane'>) 
         <Box key={`sg-${s.id}`} flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
           <Text color={C.text}>{s.name}</Text>
           <Text color={C.faint}>{reasonText(s)}</Text>
-          <Button key={`accept-${s.id}`} label="Aggiungi" plain onPress={act.press} />
-          <Button key={`dismiss-${s.id}`} label="No" plain onPress={act.press} />
+          <Button key={keyFor('accept', s.id)} label="Aggiungi" plain onPress={act.press} />
+          <Button key={keyFor('dismiss', s.id)} label="No" plain onPress={act.press} />
         </Box>
       ))}
     </Box>
@@ -180,8 +181,8 @@ export async function drawDashboard($: EngineInterface, e: RenderInput<'Pane'>) 
       <Box width="100%" flexDirection="row" gap={2} flexWrap="wrap">
         <Link href={portalUrl(c.id)} label="Apri nel portale" />
         <Button key={`copy-${c.name}`} label="Copia nome" plain onPress={act.copy(c.name)} />
-        <Button key={`refresh-${c.name}`} label={busy.ids.includes(c.id) ? 'Aggiorno…' : 'Aggiorna'} plain onPress={act.press} />
-        <Button key={`exclude-${c.id}`} label="× Togli dal progetto" plain onPress={act.press} />
+        <Button key={keyFor('refresh', c.id)} label={busy.ids.includes(c.id) ? 'Aggiorno…' : 'Aggiorna'} plain onPress={act.press} />
+        <Button key={keyFor('exclude', c.id)} label="× Togli dal progetto" plain onPress={act.press} />
       </Box>
     </Box>
   )
@@ -191,7 +192,7 @@ export async function drawDashboard($: EngineInterface, e: RenderInput<'Pane'>) 
       <Box key={`row-${c.id}`} flexDirection="column" paddingX={1} backgroundColor={isOpen ? C.surface2 : C.bg} hover={{ backgroundColor: C.surface2 }}>
         <Box flexDirection="row" alignItems="center" gap={1}>
           {statusMark(busy.ids.includes(c.id) ? 'busy' : c.status)}
-          <Button key={`open-${c.name}`} label={`${isOpen ? '▾' : '▸'} ${c.name}`} plain onPress={act.toggleCard(c.id)} />
+          <Button key={keyFor('open', c.name)} label={`${isOpen ? '▾' : '▸'} ${c.name}`} plain onPress={act.toggleCard(c.id)} />
           <Box flexGrow={1}>
             <Text color={c.status === 'failed' ? STATUS.failed.color : C.muted} wrap="truncate-end">{keyFact(c)}</Text>
           </Box>
@@ -226,7 +227,7 @@ export async function drawDashboard($: EngineInterface, e: RenderInput<'Pane'>) 
       {Object.keys(rules?.groups ?? {}).map((g, i) => (
         <Box key={`grp-${g}`} flexDirection="row" alignItems="center">
           <Text color={C.muted}>{groupNames[i]}</Text>
-          <Button key={`remove-${g}`} label="×" plain onPress={act.press} />
+          <Button key={keyFor('remove-group', g)} label="×" plain onPress={act.press} />
         </Box>
       ))}
     </Box>
@@ -234,13 +235,13 @@ export async function drawDashboard($: EngineInterface, e: RenderInput<'Pane'>) 
   const footer = (
     <Box key="footer" flexDirection="column" gap={1}>
       <Box flexDirection="row" gap={2} flexWrap="wrap">
-        {hiddenIds.length > 0 ? <Button key="hidden" label={`Nascoste (${hiddenIds.length})`} plain onPress={act.toggle('showHidden')} /> : null}
+        {hiddenIds.length > 0 ? <Button key="show-hidden" label={`Nascoste (${hiddenIds.length})`} plain onPress={act.toggle('showHidden')} /> : null}
         {autoCount > 0 ? <Button key="show-auto" label={ui.showAuto ? `Nascondi le ${autoCount} create da Azure` : `+${autoCount} create da Azure (mostra)`} plain onPress={act.toggle('showAuto')} /> : null}
       </Box>
       {ui.showHidden ? hiddenIds.map(id => (
         <Box key={`hid-${id}`} flexDirection="row" gap={1} alignItems="center">
           <Text color={C.faint}>{cache?.resources[id]?.name ?? nameFromId(id)}</Text>
-          <Button key={`restore-${id}`} label="Ripristina" plain onPress={act.press} />
+          <Button key={keyFor('restore', id)} label="Ripristina" plain onPress={act.press} />
         </Box>
       )) : null}
     </Box>
@@ -250,7 +251,7 @@ export async function drawDashboard($: EngineInterface, e: RenderInput<'Pane'>) 
     <Box flexDirection="column" gap={1} padding={1} backgroundColor={C.bg}>
       {header}
       {banners}
-      {ui.isAdding ? picker(els, act, []) : null}
+      {ui.isAdding ? picker(els, act, found) : null}
       {chips}
       {summary}
       {empty}

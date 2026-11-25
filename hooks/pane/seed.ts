@@ -1,15 +1,14 @@
 /*
  * pane/seed.ts — test helpers of Pannello (used only by the pane's *.test.tsx): the
  * mounted Pane request, invented demo-suite state built from fixtures/azure.ts, a
- * `state.get` seed that answers Raccolta's keys, and a fake AzActions that records
- * every call instead of touching Azure. The pane itself never imports this file.
+ * `state.get` seed that answers Raccolta's keys (and, when given, the pane's `ui`).
+ * The pane itself never imports this file.
  */
 import type { On } from 'claude-code'
 import { mock } from 'claude-code/testing'
 
-import type { AzActions } from '../contract'
 import { DEMO_SUITE_ROWS, gid, SUB } from '../fixtures/azure'
-import type { AzCache, AzCard, AzProject, AzRules, AzSuggestion } from '../../types'
+import type { AzCache, AzCard, AzProject, AzRules } from '../../types'
 
 export const NOW = 1_764_000_000_000
 export const ROOT = '/work/demo-suite'
@@ -52,18 +51,3 @@ export const seed = (on: On, values: Record<string, unknown> | (() => Record<str
 }
 
 export const demoState = (): Record<string, unknown> => ({ project, rules: rules(), cache: cache() })
-
-export type Call = [keyof AzActions, unknown?]
-/** A Raccolta that only records: every action resolves at once; search answers `found`. */
-export const recorder = (found: AzSuggestion[] = []): { actions: AzActions; calls: Call[] } => {
-  const calls: Call[] = []
-  const rec = (name: keyof AzActions) => async (_$: unknown, arg?: unknown): Promise<void> => { calls.push(arg === undefined ? [name] : [name, arg]) }
-  const actions: AzActions = {
-    scan: rec('scan'), update: rec('update'), refreshOne: rec('refreshOne'), refreshCost: rec('refreshCost'),
-    openCard: rec('openCard'), include: rec('include'), exclude: rec('exclude'), restore: rec('restore'),
-    addGroup: rec('addGroup'), removeGroup: rec('removeGroup'), accept: rec('accept'), dismiss: rec('dismiss'),
-    resetRules: rec('resetRules'),
-    search: async (_$, text) => { calls.push(['search', text]); return found },
-  }
-  return { actions, calls }
-}

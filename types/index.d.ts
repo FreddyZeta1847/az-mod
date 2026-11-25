@@ -118,6 +118,8 @@ declare module 'claude-code' {
       cache: Shaped<AzCache | null>
       events: Shaped<AzEvent[]>
       suggestions: Shaped<AzSuggestion[]>
+      /** Results of the «+ Aggiungi» search, written by Raccolta on ui.input of the search Input. */
+      found: Shaped<AzSuggestion[]>
       autoAdded: Shaped<AzAutoAdded>
       busy: Shaped<AzBusy>
       health: Shaped<AzHealth>
