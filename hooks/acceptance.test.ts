@@ -33,6 +33,9 @@ type World = { files: Map<string, string>; runs: string[][]; seen: Seen; written
 const unshape = (v: unknown): unknown =>
   v !== null && typeof v === 'object' && 'shape' in v ? (v as unknown as { value: unknown }).value : v
 
+/** On Windows the engine resolves '/data/x' to 'C:\data\x' before the fs hooks: compare paths in one form. */
+const norm = (p: string): string => p.replace(/\\/g, '/').replace(/^[A-Za-z]:/, '')
+
 const world = (on: On): World => {
   const w: World = { files: new Map(), runs: [], seen: {}, written: [] }
   const result = (exitCode: number, stdout: string, stderr: string) =>
@@ -45,7 +48,7 @@ const world = (on: On): World => {
     if (argv[0] === 'git') return { value: result(128, '', 'fatal: not a git repository') }
     if (argv[1] === 'rest') {
       const body = argv.find(a => a.startsWith('@'))?.slice(1)
-      const text = body === undefined ? undefined : w.files.get(body)
+      const text = body === undefined ? undefined : w.files.get(norm(body))
       if (text === undefined || !text.toLowerCase().includes('rg-demo-suite')) {
         return { value: result(1, '', 'ERROR: the Resource Graph query does not name the project group') }
       }
@@ -55,9 +58,9 @@ const world = (on: On): World => {
   on('process.hookEnv', () => ({ value: { CLAUDE_PLUGIN_DATA: '/data' } }))
   on('session.root', () => ({ value: ROOT }))
   on('vcs.detect', () => null)
-  on('fs.exists', (_$, e) => ({ value: w.files.has(e.path) }))
-  on('fs.read', (_$, e) => (w.files.has(e.path) ? { value: w.files.get(e.path) as string } : { deny: `ENOENT ${e.path}` }))
-  on('fs.write', (_$, e) => { w.files.set(e.path, e.text); w.written.push(e.text); return { value: undefined } })
+  on('fs.exists', (_$, e) => ({ value: w.files.has(norm(e.path)) }))
+  on('fs.read', (_$, e) => (w.files.has(norm(e.path)) ? { value: w.files.get(norm(e.path)) as string } : { deny: `ENOENT ${e.path}` }))
+  on('fs.write', (_$, e) => { w.files.set(norm(e.path), e.text); w.written.push(e.text); return { value: undefined } })
   on('fs.list', () => ({ value: [] }))
   on('ui.panes', () => ({ value: [{ id: 'az-mod', title: 'Azure', isShown: true, isFocused: false, isPlaced: true }] }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
