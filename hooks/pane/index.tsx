@@ -1,10 +1,9 @@
 /*
- * pane/index.tsx — entry of Pannello: registerPane(on, actions) registers /az, opens the
- * pane and draws the dashboard from state, calling only the AzActions it is given.
+ * pane/index.tsx — entry of Pannello: registerPane(on) registers /az, opens the pane and
+ * draws the dashboard from state. Buttons carry the contract's keys (contract.ts keyFor);
+ * their onPress only updates the `ui` atom: Raccolta hears the presses itself.
  * STUB written by the main session: the Pannello child replaces it (tasks G–H).
  */
 import type { On } from 'claude-code'
 
-import type { AzActions } from '../contract'
-
-export const registerPane = (_on: On, _actions: AzActions): void => {}
+export const registerPane = (_on: On): void => {}
