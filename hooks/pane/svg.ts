@@ -1,6 +1,6 @@
 /*
  * pane/svg.ts — SVG markup for the az-mod pane (from design/bozze/svg.ts): type icons,
- * the status dot and the status donut. Every builder returns a whole <svg> with explicit
+ * the status dot, the status donut and the cost bar. Every builder returns a whole <svg> with explicit
  * width/height; nothing here is interactive (interactive SVGs made the pane's scroll
  * bounce), so no <style>, <title> hover or script: the numbers live in the legend.
  */
@@ -46,4 +46,18 @@ export const statusDonut = (counts: Record<AzStatus, number>, size = 132): strin
   }).join('')
   const font = 'font-family="Segoe UI, sans-serif"'
   return wrap(size, size, `<circle cx="21" cy="21" r="15.9" fill="none" stroke="${C.border}" stroke-width="4.5"/>${slices}<text x="21" y="22.5" text-anchor="middle" font-size="8" font-weight="600" fill="${C.text}" ${font}>${total}</text><text x="21" y="28" text-anchor="middle" font-size="3.2" fill="${C.muted}" ${font}>risorse</text>`, '0 0 42 42')
+}
+
+/** The month's cost by type, one segment per part (zero parts left out). An image, never interactive. */
+export const costBar = (parts: { color: string; value: number }[], width = 300, height = 14): string => {
+  const shown = parts.filter(p => p.value > 0)
+  const total = shown.reduce((a, p) => a + p.value, 0)
+  let x = 0
+  const rects = shown.map(p => {
+    const w = (p.value / total) * width
+    const rect = `<rect x="${x.toFixed(1)}" y="0" width="${Math.max(w - 2, 1).toFixed(1)}" height="${height}" rx="3" fill="${p.color}"/>`
+    x += w
+    return rect
+  }).join('')
+  return wrap(width, height, rects || `<rect x="0" y="0" width="${width}" height="${height}" rx="3" fill="${C.border}"/>`)
 }

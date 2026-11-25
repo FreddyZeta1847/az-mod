@@ -2,9 +2,10 @@
  * pane/theme.ts — the single color system and the Italian labels of the az-mod pane
  * (direction C «cruscotto», from design/bozze/data.ts): surface colors, the status
  * colors (used only for status), one hue per resource type, fact labels, and the small
- * text helpers that turn a card's facts and times into what a row shows.
+ * text helpers that turn a card's facts and times into what a row shows, plus the words of
+ * amounts, warnings («Da guardare») and activities.
  */
-import type { AzCard, AzFactKey, AzStatus, Ms } from '../../types'
+import type { AzCard, AzFactKey, AzStatus, AzWarning, Ms } from '../../types'
 
 import { FACTS_BY_TYPE } from '../contract'
 
@@ -93,4 +94,35 @@ export const ago = (now: Ms, at: Ms): string => {
 export const nameFromId = (id: string): string => {
   const m = /\/providers\/[^/]+\/[^/]+\/(.+)$/.exec(id)
   return (m?.[1] ?? id.split('/').pop() ?? id).split('/').filter((_, i) => i % 2 === 0).join('/')
+}
+
+/** «12,30 €» for euros, «12,30 USD» for any other currency. */
+export const money = (n: number, currency: string): string =>
+  `${n.toFixed(2).replace('.', ',')} ${currency === 'EUR' ? '€' : currency}`
+
+export const WARNING_TEXT: Record<AzWarning, { cause: string; action: string }> = {
+  'revision-failed': { cause: "l'ultima revisione non è partita", action: 'guarda i log della revisione nel portale' },
+  'app-stopped': { cause: "l'app è ferma", action: 'riavviala dal portale o chiedilo a Claude' },
+  'cost-spike': { cause: 'costa più di 1,5 volte il mese scorso', action: 'controlla repliche e piano' },
+  'kv-protection-off': { cause: 'Key Vault senza protezione dalla cancellazione', action: 'attiva soft delete e protezione' },
+  'registry-admin': { cause: "utente admin del registry attivo", action: "usa un'identità gestita e spegni l'admin" },
+  'public-access': { cause: 'accesso pubblico attivo', action: "limita l'accesso dalla rete" },
+  'build-not-ready': { cause: "l'ultima build non è pronta", action: 'guarda la build su GitHub' },
+}
+
+/** [operation, words when it worked, words when it failed]: the first match wins. */
+const ACTIVITY_WORDS: [RegExp, string, string][] = [
+  [/\/delete$/, 'cancellata', 'cancellazione non riuscita'],
+  [/\/restart\/action$/, 'riavviata', 'riavvio non riuscito'],
+  [/\/stop\/action$/, 'fermata', 'arresto non riuscito'],
+  [/\/start\/action$/, 'avviata', 'avvio non riuscito'],
+  [/\/deploy\/action$/, 'pubblicata', 'pubblicazione non riuscita'],
+  [/\/activate\/action$/, 'revisione attivata', 'attivazione non riuscita'],
+  [/\/write$/, 'creata o modificata', 'modifica non riuscita'],
+]
+
+export const activityText = (op: string, status: string): string => {
+  const words = ACTIVITY_WORDS.find(([re]) => re.test(op.toLowerCase()))
+  const failed = status.toLowerCase() === 'failed'
+  return words === undefined ? (failed ? 'operazione non riuscita' : 'operazione') : failed ? words[2] : words[1]
 }
