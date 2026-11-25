@@ -1,5 +1,13 @@
 {
   "name": "az-mod",
-  "owner": { "name": "FreddyZeta1847" },
-  "plugins": [{ "name": "az-mod", "source": "./" }]
+  "description": "az-mod: the Azure resources of the current project in a Claude Code side pane.",
+  "owner": {
+    "name": "FreddyZeta1847"
+  },
+  "plugins": [
+    {
+      "name": "az-mod",
+      "source": "./"
+    }
+  ]
 }
