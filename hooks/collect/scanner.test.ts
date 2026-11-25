@@ -6,7 +6,7 @@
  */
 import { expect, test } from 'claude-code/testing'
 
-import { acceptInto, dismissIn, rankSearch, removeGroupFrom, restoreIn } from './rules-ops'
+import { addGroupTo, dismissIn, includeIn, isGroupId, rankSearch, removeGroupFrom, restoreIn } from './rules-ops'
 import { scanCandidates } from './scan'
 import type { ScanRow } from './scan'
 import { emptyRules, planReset } from './store'
@@ -62,11 +62,13 @@ test('similar names stay probable', async () => {
 // ---------------------------------------------------------------- F2 rule changes
 
 test('accept adds include', async () => {
+  // «accept» runs includeResource: a resource id is included, a group id becomes a group
   const id = `${gid('rg-tasklist')}/providers/microsoft.web/sites/tasklist`
-  const r = acceptInto(rules({ excludes: { [id]: { at: 1 } } }), sug(id), 9)
+  const r = includeIn(rules({ excludes: { [id]: { at: 1 } } }), id, 9)
   expect(r.includes[id]).toEqual({ at: 9 })
   expect(r.excludes[id]).toBeUndefined()
-  expect(Object.keys(acceptInto(rules(), sug(gid('rg-tasklist'), 'group'), 9).groups)).toEqual([gid('rg-tasklist')])
+  expect(isGroupId(gid('rg-tasklist'))).toBe(true)
+  expect(Object.keys(addGroupTo(rules(), gid('rg-tasklist'), 9).groups)).toEqual([gid('rg-tasklist')])
 })
 
 test('dismiss remembered', async () => {

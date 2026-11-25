@@ -54,8 +54,8 @@ test('isByClaude matches an activity to a recent hook event on the same resource
 test('pane button keys round-trip to the action Raccolta performs', async () => {
   expect(parseKey('update')).toEqual({ action: 'update' })
   expect(parseKey('scan')).toEqual({ action: 'scan' })
-  expect(parseKey(keyFor('open', 'app-control'))).toEqual({ action: 'open', arg: 'app-control' })
-  expect(keyFor('open', 'app-control')).toBe('open-app-control')
+  expect(parseKey(keyFor('open', ID_A))).toEqual({ action: 'open', arg: ID_A })
+  expect(keyFor('open', ID_A)).toBe(`open-${ID_A}`)
   expect(parseKey(keyFor('accept', ID_A))).toEqual({ action: 'accept', arg: ID_A })
   expect(parseKey(keyFor('remove-group', `${SUB}/resourcegroups/rg-x`))).toEqual({ action: 'remove-group', arg: `${SUB}/resourcegroups/rg-x` })
   expect(parseKey('show-auto')).toBe(null)

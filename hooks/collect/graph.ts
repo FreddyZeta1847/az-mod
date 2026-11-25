@@ -4,14 +4,16 @@
  * `az resource show`, and turns each row into a card. Only named fields are asked for —
  * never `properties` whole (Container App env values are plaintext there) — and each fact
  * comes only from FACTS_BY_TYPE of the row's type, through the secret filter.
- * The query body travels in a file under the data dir (`--body @<file>`).
+ * The query body travels in a file under the data dir (`--body @<file>`), one file per query
+ * and page (bodyFileFor), so two reads running at once never read each other's query.
  */
 import type { EngineInterface } from 'claude-code'
 
 import { runAz } from './az'
 import type { AzRun } from './az'
 import { cleanValue } from './secrets'
-import { dataDir } from './store'
+import { stripUserinfo } from './project'
+import { dataDir, hash6 } from './store'
 import { AUTO_CREATED_GROUPS, AUTO_CREATED_TYPES, FACTS_BY_TYPE, groupIdOf } from '../contract'
 import type { GraphRow } from '../fixtures/azure'
 import type { AzCard, AzFactKey, AzFacts, AzId, AzRules, AzStatus, AzWarning } from '../../types'
@@ -49,14 +51,17 @@ export const SHOW_QUERY = `{${[
   'id:id', 'name:name', 'type:type', 'resourceGroup:resourceGroup', 'location:location', 'kind:kind', 'sku:sku.name',
   'runningStatus:properties.runningStatus', 'state:properties.state', 'provisioningState:properties.provisioningState',
   'latestRevisionName:properties.latestRevisionName', 'latestReadyRevisionName:properties.latestReadyRevisionName',
-  'url:properties.configuration.ingress.fqdn', 'image:properties.template.containers[0].image',
+  'url:properties.configuration.ingress.fqdn || properties.defaultHostName || properties.loginServer',
+  'image:properties.template.containers[0].image',
   'cpu:properties.template.containers[0].resources.cpu', 'memory:properties.template.containers[0].resources.memory',
   'minReplicas:properties.template.scale.minReplicas', 'maxReplicas:properties.template.scale.maxReplicas',
   'revisionMode:properties.configuration.activeRevisionsMode', 'ingressExternal:properties.configuration.ingress.external',
+  'traffic:properties.configuration.ingress.traffic', 'customDomains:properties.customDomains',
   'runtime:properties.siteConfig.linuxFxVersion', 'alwaysOn:properties.siteConfig.alwaysOn', 'httpsOnly:properties.httpsOnly',
   'publicNetworkAccess:properties.publicNetworkAccess', 'repositoryUrl:properties.repositoryUrl', 'branch:properties.branch',
   'accessTier:properties.accessTier', 'minTls:properties.minimumTlsVersion', 'softDelete:properties.enableSoftDelete',
-  'purgeProtection:properties.enablePurgeProtection', 'maxSizeBytes:properties.maxSizeBytes', 'adminUser:properties.adminUserEnabled',
+  'purgeProtection:properties.enablePurgeProtection', 'maxSizeBytes:properties.maxSizeBytes', 'freeTier:properties.enableFreeTier',
+  'adminUser:properties.adminUserEnabled', 'identityIds:identity.userAssignedIdentities',
   'environmentId:properties.managedEnvironmentId', 'serverFarmId:properties.serverFarmId',
   'registryServer:properties.configuration.registries[0].server',
 ].join(',')}}`
@@ -82,6 +87,10 @@ export const nextPage = (answer: unknown): string | undefined => {
 // ---------------------------------------------------------------- rows → cards
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null)
+/** A list or object (as `az resource show` returns it) as one line; a string as it is. */
+const asText = (v: unknown): string | null => (v === null || v === undefined ? null : typeof v === 'string' ? str(v) : JSON.stringify(v))
+/** 'Standard_GRS' → 'GRS' (the full read projects it, a single read derives it). */
+const redundancyOf = (r: GraphRow): string | null => str(r.redundancy) ?? (str(r.sku)?.split('_')[1] ?? null)
 const BUSY = /^(creating|updating|deleting|inprogress|accepted|provisioning|scaling|activating)$/i
 
 const revisionFailed = (r: GraphRow): boolean =>
@@ -101,13 +110,13 @@ const statusOf = (r: GraphRow): AzStatus => {
 /** Where each fact comes from in a row. */
 const FACT_SOURCE: Partial<Record<AzFactKey, (r: GraphRow) => unknown>> = {
   sku: r => r.sku, kind: r => r.kind, url: r => r.url, runtime: r => r.runtime, alwaysOn: r => r.alwaysOn,
-  httpsOnly: r => r.httpsOnly, publicAccess: r => r.publicNetworkAccess, customDomains: r => r.customDomains,
-  revisionMode: r => r.revisionMode, traffic: r => r.traffic, latestRevision: r => r.latestRevisionName,
+  httpsOnly: r => r.httpsOnly, publicAccess: r => r.publicNetworkAccess, customDomains: r => asText(r.customDomains),
+  revisionMode: r => r.revisionMode, traffic: r => asText(r.traffic), latestRevision: r => r.latestRevisionName,
   latestRevisionReady: r => (str(r.latestRevisionName) !== null && str(r.latestReadyRevisionName) !== null ? !revisionFailed(r) : null),
   ingress: r => (r.ingressExternal === null || r.ingressExternal === undefined ? null : r.ingressExternal ? 'external' : 'internal'),
   image: r => r.image, cpu: r => r.cpu, memoryGi: r => (str(r.memory) === null ? null : parseFloat(r.memory as string)),
-  minReplicas: r => r.minReplicas, maxReplicas: r => r.maxReplicas, repositoryUrl: r => r.repositoryUrl, branch: r => r.branch,
-  redundancy: r => r.redundancy, accessTier: r => r.accessTier, minTls: r => r.minTls, softDelete: r => r.softDelete,
+  minReplicas: r => r.minReplicas, maxReplicas: r => r.maxReplicas, repositoryUrl: r => (str(r.repositoryUrl) === null ? null : stripUserinfo(r.repositoryUrl as string)), branch: r => r.branch,
+  redundancy: redundancyOf, accessTier: r => r.accessTier, minTls: r => r.minTls, softDelete: r => r.softDelete,
   purgeProtection: r => r.purgeProtection, maxSizeBytes: r => r.maxSizeBytes, freeTier: r => r.freeTier, adminUser: r => r.adminUser,
 }
 
@@ -129,8 +138,12 @@ const warningsOf = (r: GraphRow, type: string, status: AzStatus): AzWarning[] =>
   return w
 }
 
+/** Identities: a list from Resource Graph (bag_keys), an object keyed by id from `az resource show`. */
+const identitiesOf = (v: unknown): string[] =>
+  Array.isArray(v) ? v : v !== null && typeof v === 'object' ? Object.keys(v as Record<string, unknown>) : []
+
 const usesOf = (r: GraphRow): AzId[] =>
-  [str(r.environmentId), str(r.serverFarmId), ...(Array.isArray(r.identityIds) ? r.identityIds : [])]
+  [str(r.environmentId), str(r.serverFarmId), ...identitiesOf(r.identityIds)]
     .filter((x): x is string => typeof x === 'string' && x.startsWith('/subscriptions/'))
     .map(x => x.toLowerCase())
 
@@ -147,7 +160,7 @@ export const rowToCard = (r: GraphRow, now: number, via: AzCard['via']): AzCard 
 }
 
 /** A registry used by name (its login server) becomes a `uses` id when that registry is among the cards. */
-const linkRegistries = (cards: Record<AzId, AzCard>, rows: GraphRow[]): void => {
+export const linkRegistries = (cards: Record<AzId, AzCard>, rows: GraphRow[]): void => {
   const byServer = new Map(Object.values(cards).filter(c => typeof c.facts.url === 'string' && c.type.endsWith('/registries'))
     .map(c => [String(c.facts.url).toLowerCase(), c.id]))
   for (const r of rows) {
@@ -160,9 +173,10 @@ const linkRegistries = (cards: Record<AzId, AzCard>, rows: GraphRow[]): void => 
 type Scope = Pick<AzRules, 'groups' | 'includes'>
 const inScope = (card: AzCard, scope: Scope): boolean => groupIdOf(card.id) in scope.groups || card.id in scope.includes
 
-/** New cards, plus the previous ones still in scope that Azure no longer lists, kept with `goneAt`. */
+/** New cards (keeping the cost a previous card had), plus the previous ones still in scope that Azure no longer lists, kept with `goneAt`. */
 export const markGone = (prev: Record<AzId, AzCard>, next: Record<AzId, AzCard>, now: number, scope: Scope): Record<AzId, AzCard> => {
-  const out = { ...next }
+  const out = Object.fromEntries(Object.entries(next).map(([id, c]) =>
+    [id, c.cost === undefined && prev[id]?.cost !== undefined ? { ...c, cost: prev[id]?.cost } : c]))
   for (const [id, card] of Object.entries(prev)) {
     if (!(id in out) && inScope(card, scope)) out[id] = { ...card, goneAt: card.goneAt ?? now }
   }
@@ -173,7 +187,12 @@ const viaOf = (id: AzId, scope: Scope): AzCard['via'] => (groupIdOf(id) in scope
 
 // ---------------------------------------------------------------- reads
 
-async function graphPage($: EngineInterface, bodyPath: string, query: string, subId: string, skipToken?: string): Promise<AzRun> {
+/** One body file per query and page: two reads at once (two sessions, Update during Scan) never share one. */
+export const bodyFileFor = (dir: string, subId: string, query: string, skipToken?: string): string =>
+  `${dir}/graph-${hash6(`${subId}\n${query}\n${skipToken ?? ''}`)}.json`
+
+async function graphPage($: EngineInterface, dir: string, query: string, subId: string, skipToken?: string): Promise<AzRun> {
+  const bodyPath = bodyFileFor(dir, subId, query, skipToken)
   const options = skipToken === undefined ? { $top: 1000 } : { $top: 1000, $skipToken: skipToken }
   await $.fs.write(bodyPath, JSON.stringify({ subscriptions: [subId], query, options }))
   return runAz($, ['rest', '--method', 'post', '--url', GRAPH_URL, '--body', `@${bodyPath}`])
@@ -182,11 +201,11 @@ async function graphPage($: EngineInterface, bodyPath: string, query: string, su
 /** Runs one Resource Graph query over every page. */
 export async function graphRows($: EngineInterface, query: string, subId: string, maxPages = 20):
   Promise<{ ok: true; rows: GraphRow[] } | Extract<AzRun, { ok: false }>> {
-  const bodyPath = `${await dataDir($)}/graph-query.json`
+  const dir = await dataDir($)
   const rows: GraphRow[] = []
   let token: string | undefined
   for (let page = 0; page < maxPages; page++) {
-    const r = await graphPage($, bodyPath, query, subId, token)
+    const r = await graphPage($, dir, query, subId, token)
     if (!r.ok) return r
     const data = (r.json as { data?: unknown }).data
     if (Array.isArray(data)) rows.push(...(data as GraphRow[]))
@@ -212,11 +231,15 @@ export async function readProject($: EngineInterface, rules: Scope, subId: strin
   return { ok: true, cards }
 }
 
-export type OneRead = { ok: true; card: AzCard } | { ok: true; gone: true } | Extract<AzRun, { ok: false }>
+export type OneRead = { ok: true; card: AzCard; row: GraphRow } | { ok: true; gone: true } | Extract<AzRun, { ok: false }>
+
+/** The resource, or its whole group, no longer exists. */
+export const isGoneMessage = (message: string): boolean => /ResourceNotFound|ResourceGroupNotFound|was not found|could not be found/i.test(message)
 
 export async function readOne($: EngineInterface, id: AzId, scope: Scope): Promise<OneRead> {
   const r = await runAz($, ['resource', 'show', '--ids', id, '--query', SHOW_QUERY])
-  if (!r.ok) return /ResourceNotFound|was not found/i.test(r.error.message) ? { ok: true, gone: true } : r
-  const card = rowToCard(r.json as GraphRow, await $.clock.now(), 'group')
-  return { ok: true, card: { ...card, via: viaOf(card.id, scope) } }
+  if (!r.ok) return isGoneMessage(r.error.message) ? { ok: true, gone: true } : r
+  const row = r.json as GraphRow
+  const card = rowToCard(row, await $.clock.now(), 'group')
+  return { ok: true, card: { ...card, via: viaOf(card.id, scope) }, row }
 }

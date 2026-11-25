@@ -11,12 +11,10 @@ import type { EngineInterface } from 'claude-code'
 
 import { currentSubscription, runAz } from './az'
 import type { AzRun } from './az'
-import { graphRows, markGone, readOne, readProject } from './graph'
+import { graphRows, linkRegistries, markGone, readOne, readProject } from './graph'
 import { resolveProject } from './project'
 import { cacheForSubscription, loop, noteError, noteSuccess, resume, shouldRefresh, intervalFor, TICK_MS } from './refresh'
-import {
-  acceptInto, addGroupTo, dismissIn, excludeIn, includeIn, isGroupId, rankSearch, removeGroupFrom, restoreIn,
-} from './rules-ops'
+import { addGroupTo, dismissIn, excludeIn, includeIn, isGroupId, rankSearch, removeGroupFrom, restoreIn } from './rules-ops'
 import { projectFiles, scanCandidates } from './scan'
 import type { ScanRow } from './scan'
 import { emptyRules, loadCache, loadRules, resetRules as writeReset, saveCache, saveRules, takeLease } from './store'
@@ -37,7 +35,7 @@ const healthAtom = atom({ plugin: 'az-mod', key: 'health' } as const,
   { az: 'ok', isLeaseHolder: false, nextAutoAt: null, rulesMode: 'ok' }, { shape: 'health-1' })
 const foundAtom = atom({ plugin: 'az-mod', key: 'found' } as const, [], { shape: 'found-1' })
 const uiAtom = atom({ plugin: 'az-mod', key: 'ui' } as const,
-  { isVisible: false, lastInputAt: 0, openCard: null, closed: [], showAuto: false, showHidden: false, isAdding: false }, { shape: 'ui-1' })
+  { lastInputAt: 0, openCard: null, closed: [], showAuto: false, showHidden: false, isAdding: false }, { shape: 'ui-1' })
 
 /** The last `az resource list` read in this module load (search and hook proposals rank it). */
 const mem = { lastList: [] as ScanRow[] }
@@ -139,7 +137,8 @@ const relatedOf = (cache: AzCache, rules: AzRules): AzSuggestion[] => {
 export async function updateProject($: EngineInterface): Promise<void> {
   const project = await read($, projectAtom)
   const rules = await read($, rulesAtom)
-  if (project === null || rules === null) return
+  // one Update at a time: a press or the hook during a running Update (timer, Scan) adds nothing
+  if (project === null || rules === null || (await read($, busyAtom)).update) return
   await setBusy($, { update: true })
   try {
     const sub = await currentSubscription($)
@@ -153,9 +152,9 @@ export async function updateProject($: EngineInterface): Promise<void> {
       ...cache, errors, stateAt: now, resources: markGone(cache.resources, r.cards, now, rules),
       groups: Object.fromEntries(Object.keys(rules.groups).map(g => [g, { name: g.slice(g.lastIndexOf('/') + 1) }])),
     }
-    takeLease(next, await $.session.id(), now)
+    const isLeaseHolder = takeLease(next, await $.session.id(), now)
     await setCache($, next)
-    await setHealth($, { az: 'ok', isLeaseHolder: true })
+    await setHealth($, { az: 'ok', isLeaseHolder })
     noteSuccess()
     await offer($, relatedOf(next, rules), ['related'])
   } catch {
@@ -177,13 +176,15 @@ export async function scanProject($: EngineInterface, isFirst = false): Promise<
     const saved = await read($, rulesAtom)
     const found = scanCandidates(project, project.key, mem.lastList, await projectFiles($, project.mainRoot), saved)
     await setHealth($, { az: 'ok' })
+    const sure: AzSuggestion[] = []
     if (isFirst || saved === null) {
       await adoptFirst($, found.sure)
     } else if (found.sure !== null && !(found.sure in saved.groups) && !(found.sure in saved.dismissed)) {
       const name = mem.lastList.find(r => groupIdOf(r.id) === found.sure)?.resourceGroup ?? found.sure
-      await offer($, [{ id: found.sure, kind: 'group', origin: 'scan', reason: 'similar-group', name }])
+      sure.push({ id: found.sure, kind: 'group', origin: 'scan', reason: 'similar-group', name })
     }
-    await offer($, found.probable, ['scan'])
+    // one offer: the sure group would be dropped by a second offer replacing the 'scan' ones
+    await offer($, [...sure, ...found.probable], ['scan'])
     await updateProject($)
   } catch {
     // shortcut: an unexpected failure only ends this Scan; the button tries again
@@ -215,7 +216,10 @@ export async function refreshOne($: EngineInterface, id: AzId): Promise<void> {
     let card: AzCard | undefined
     if ('card' in r) card = old?.cost === undefined ? r.card : { ...r.card, cost: old.cost }
     else if (old !== undefined) card = { ...old, goneAt: old.goneAt ?? await $.clock.now() }
-    if (card !== undefined) await setCache($, { ...latest, resources: { ...latest.resources, [id]: card } })
+    if (card === undefined) return
+    const resources = { ...latest.resources, [id]: card }
+    if ('row' in r) linkRegistries(resources, [r.row])
+    await setCache($, { ...latest, resources })
   } catch {
     // shortcut: a failed single read leaves the card as it was
   } finally {
@@ -225,12 +229,13 @@ export async function refreshOne($: EngineInterface, id: AzId): Promise<void> {
 
 /** Takes a group's cards out of the photo (but those included one by one). */
 async function dropGroupCards($: EngineInterface, groupId: string, rules: AzRules): Promise<void> {
+  // the «Uso rg-x» line goes even when there is no photo yet (the first read failed)
+  const auto = await read($, autoAddedAtom)
+  if (auto?.groupId === groupId) await change($, autoAddedAtom, () => null)
   const cache = await read($, cacheAtom)
   if (cache === null) return
   const resources = Object.fromEntries(Object.entries(cache.resources).filter(([id]) => groupIdOf(id) !== groupId || id in rules.includes))
   await setCache($, { ...cache, resources })
-  const auto = await read($, autoAddedAtom)
-  if (auto?.groupId === groupId) await change($, autoAddedAtom, () => null)
 }
 
 export async function includeResource($: EngineInterface, id: AzId): Promise<void> {
@@ -263,18 +268,6 @@ export async function removeGroup($: EngineInterface, groupId: string): Promise<
   if (rules === null) return
   const next = removeGroupFrom(rules, groupId, await $.clock.now())
   if (await setRules($, next)) await dropGroupCards($, groupId, next)
-}
-
-export async function acceptSuggestion($: EngineInterface, id: string): Promise<void> {
-  const all = [...(await read($, suggestionsAtom)), ...(await read($, foundAtom))]
-  const s = all.find(x => x.id === id)
-  const rules = await currentRules($)
-  if (rules === null) return
-  const next = s === undefined ? includeIn(rules, id, await $.clock.now()) : acceptInto(rules, s, await $.clock.now())
-  if (!(await setRules($, next))) return
-  await dropSuggestion($, id)
-  if (id in next.groups) await updateProject($)
-  else await refreshOne($, id)
 }
 
 /** «No» to a proposal; on the auto-added group («Annulla») it also takes the group and its cards out. */
@@ -318,11 +311,15 @@ export async function search($: EngineInterface, text: string): Promise<void> {
 
 // ---------------------------------------------------------------- hook support
 
-/** The card an event names: by name (and group when given). */
-const cardFor = (cache: AzCache | null, e: AzEvent): AzCard | undefined =>
-  cache === null || e.name === undefined ? undefined
+/** The card an event names: by one of its --ids, else by name (and group when given). */
+const cardFor = (cache: AzCache | null, e: AzEvent): AzCard | undefined => {
+  if (cache === null) return undefined
+  const byId = (e.ids ?? []).find(id => id in cache.resources)
+  if (byId !== undefined) return cache.resources[byId]
+  return e.name === undefined ? undefined
     : Object.values(cache.resources).find(c => c.name.toLowerCase() === e.name &&
       (e.group === undefined || c.group.toLowerCase() === e.group))
+}
 
 /** After an az command of Claude's: log it, then refresh what it changed or propose it. Never keeps the text. */
 export async function afterAzCommand($: EngineInterface, e: AzEvent | 'unclear'): Promise<void> {
@@ -345,10 +342,13 @@ export async function afterAzCommand($: EngineInterface, e: AzEvent | 'unclear')
 
 /** «Vista: X, la aggiungo?» — once, never when already claimed, excluded or dismissed. */
 async function proposeWritten($: EngineInterface, e: AzEvent, groupId: string | undefined): Promise<void> {
-  if (e.name === undefined && groupId === undefined) return
-  if (mem.lastList.length === 0) await readList($)
-  const row = mem.lastList.find(r => r.name.toLowerCase() === e.name && (e.group === undefined || r.resourceGroup.toLowerCase() === e.group))
-  const id = row?.id.toLowerCase() ?? groupId
+  if (e.name === undefined && groupId === undefined && (e.ids ?? []).length === 0) return
+  const find = (): ScanRow | undefined => mem.lastList.find(r => (e.ids ?? []).includes(r.id.toLowerCase()) ||
+    (r.name.toLowerCase() === e.name && (e.group === undefined || r.resourceGroup.toLowerCase() === e.group)))
+  // a resource Claude just created is not in a list read before: read it again once
+  let row = find()
+  if (row === undefined && await readList($)) row = find()
+  const id = row?.id.toLowerCase() ?? groupId ?? e.ids?.[0]
   if (id === undefined) return
   const rules = await read($, rulesAtom)
   if (rules !== null && (id in rules.dismissed || id in rules.includes || id in rules.excludes || id in rules.groups)) return
@@ -362,7 +362,8 @@ async function proposeWritten($: EngineInterface, e: AzEvent, groupId: string | 
 
 /** Runs the action a pressed contract key asks for; a press also restarts a stopped automatic Update. */
 export async function runKey($: EngineInterface, action: PaneAction, arg: string | undefined): Promise<void> {
-  resume()
+  // only a press that asks Azure for something restarts a stopped or waiting automatic Update
+  if (action !== 'open' && action !== 'refresh-cost') resume()
   try {
     if (action === 'update') return await updateProject($)
     if (action === 'scan') return await scanProject($)
@@ -373,7 +374,7 @@ export async function runKey($: EngineInterface, action: PaneAction, arg: string
     if (action === 'add') return await includeResource($, arg)
     if (action === 'exclude') return await excludeResource($, arg)
     if (action === 'restore') return await restoreResource($, arg)
-    if (action === 'accept') return await acceptSuggestion($, arg)
+    if (action === 'accept') return await includeResource($, arg)
     if (action === 'dismiss') return await dismissSuggestion($, arg)
     if (action === 'add-group') return await addGroup($, arg)
     if (action === 'remove-group') return await removeGroup($, arg)

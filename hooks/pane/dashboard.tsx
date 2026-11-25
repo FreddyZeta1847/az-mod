@@ -28,7 +28,7 @@ const healthAtom = atom({ plugin: 'az-mod', key: 'health' } as const,
   { az: 'ok', isLeaseHolder: false, nextAutoAt: null, rulesMode: 'ok' }, { shape: 'health-1' })
 const foundAtom = atom({ plugin: 'az-mod', key: 'found' } as const, [], { shape: 'found-1' })
 const uiAtom = atom({ plugin: 'az-mod', key: 'ui' } as const,
-  { isVisible: false, lastInputAt: 0, openCard: null, closed: [], showAuto: false, showHidden: false, isAdding: false }, { shape: 'ui-1' })
+  { lastInputAt: 0, openCard: null, closed: [], showAuto: false, showHidden: false, isAdding: false }, { shape: 'ui-1' })
 import { dot, statusDonut, typeIcon } from './svg'
 import { C, FACT_LABELS, STATUS, STATUS_ORDER, TYPE_ORDER, ago, factsOf, keyFact, nameFromId, typeStyle } from './theme'
 
@@ -180,7 +180,7 @@ export async function drawDashboard($: EngineInterface, e: RenderInput<'Pane'>) 
       ))}
       <Box width="100%" flexDirection="row" gap={2} flexWrap="wrap">
         <Link href={portalUrl(c.id)} label="Apri nel portale" />
-        <Button key={`copy-${c.name}`} label="Copia nome" plain onPress={act.copy(c.name)} />
+        <Button key={`copy-${c.id}`} label="Copia nome" plain onPress={act.copy(c.name)} />
         <Button key={keyFor('refresh', c.id)} label={busy.ids.includes(c.id) ? 'Aggiorno…' : 'Aggiorna'} plain onPress={act.press} />
         <Button key={keyFor('exclude', c.id)} label="× Togli dal progetto" plain onPress={act.press} />
       </Box>
@@ -193,7 +193,7 @@ export async function drawDashboard($: EngineInterface, e: RenderInput<'Pane'>) 
       <Box key={`row-${c.id}`} flexDirection="column" paddingX={1} backgroundColor={isOpen ? C.surface2 : C.bg} hover={{ backgroundColor: C.surface2 }}>
         <Box flexDirection="row" alignItems="center" gap={1}>
           {statusMark(busy.ids.includes(c.id) ? 'busy' : c.status)}
-          <Button key={keyFor('open', c.name)} label={`${isOpen ? '▾' : '▸'} ${c.name}`} plain onPress={act.toggleCard(c.id, isOpen)} />
+          <Button key={keyFor('open', c.id)} label={`${isOpen ? '▾' : '▸'} ${c.name}`} plain onPress={act.toggleCard(c.id, isOpen)} />
           <Box flexGrow={1}>
             <Text color={c.status === 'failed' ? STATUS.failed.color : C.muted} wrap="truncate-end">{keyFact(c)}</Text>
           </Box>

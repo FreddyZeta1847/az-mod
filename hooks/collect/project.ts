@@ -6,6 +6,7 @@
  */
 import type { EngineInterface } from 'claude-code'
 
+import { hash6 } from './store'
 import { normalizeName } from '../contract'
 import type { AzProject } from '../../types'
 
@@ -18,8 +19,9 @@ const dirname = (path: string): string => path.replace(/[\\/]+$/, '').replace(/[
 export const mainRootFrom = (x: { root: string; vcsMainRoot: string | null; commonDir: string | null }): string =>
   x.vcsMainRoot ?? (x.commonDir !== null ? dirname(x.commonDir) : x.root)
 
+/** The key is the folder's normalized name; a name with no latin letter or digit gets `p-<hash6(mainRoot)>`. */
 export const projectFrom = (mainRoot: string, remote: string | null): AzProject =>
-  ({ key: normalizeName(basename(mainRoot)), mainRoot, remote })
+  ({ key: normalizeName(basename(mainRoot)) || `p-${hash6(mainRoot)}`, mainRoot, remote })
 
 /** 'https://u:token@GitHub.com/x/y.git' → 'https://github.com/x/y'; scp form keeps its user (no secret). */
 export const stripUserinfo = (url: string): string => {

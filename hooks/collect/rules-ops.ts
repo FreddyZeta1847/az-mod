@@ -1,7 +1,7 @@
 /*
- * rules-ops.ts — the pure rule changes behind the pane's buttons (accept, include,
- * exclude, restore, add/remove group, dismiss — «Annulla» on the auto-added group is a
- * dismiss) and the ranking of the «+ Aggiungi» search. Each returns new rules with
+ * rules-ops.ts — the pure rule changes behind the pane's buttons (include — also behind
+ * «accept», a group id becoming a group —, exclude, restore, add/remove group, dismiss —
+ * «Annulla» on the auto-added group is a dismiss) and the ranking of the «+ Aggiungi» search. Each returns new rules with
  * updatedAt set; actions.ts saves them through saveRules.
  */
 import { groupIdOf } from '../contract'
@@ -31,9 +31,6 @@ export const addGroupTo = (r: AzRules, g: AzGroupId, now: number): AzRules => ed
 export const removeGroupFrom = (r: AzRules, g: AzGroupId, now: number): AzRules => edit(r, now, {}, { groups: [g] })
 /** «No» to a proposal; on a claimed group (the auto-added one) it also takes the group out. */
 export const dismissIn = (r: AzRules, id: string, now: number): AzRules => edit(r, now, { dismissed: id }, { groups: [id] })
-
-export const acceptInto = (r: AzRules, s: AzSuggestion, now: number): AzRules =>
-  s.kind === 'group' || isGroupId(s.id) ? addGroupTo(r, s.id, now) : includeIn(r, s.id, now)
 
 const SEARCH_LIMIT = 20
 

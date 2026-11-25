@@ -5,7 +5,7 @@
  * Azure-created resources and the «+ Aggiungi» picker. The Azure side of a press
  * (update, scan, add…) is Raccolta's: it hooks `ui.press` and reads the Button's key with
  * contract.ts `parseKey`, so every Raccolta key here comes from `keyFor`. Pane-only keys
- * (`show-auto`, `show-hidden`, `toggle-add`, `close-picker`, `copy-<name>`) parse to null.
+ * (`show-auto`, `show-hidden`, `toggle-add`, `close-picker`, `copy-<id>`) parse to null.
  * The picker's Input is SEARCH_INPUT; Raccolta answers it in the `found` state key.
  * Usage: `const act = handlers($, setUi)` inside a ui.render hook, then `onPress={act.press}`
  * (never name it `h`: JSX compiles to the global `h`).
@@ -38,7 +38,6 @@ export function handlers($: EngineInterface, setUi: (change: (u: AzUi) => Partia
     },
     /** A picked result: the picker closes (Raccolta adds it, by the button's key). */
     add: async (): Promise<void> => setUi(() => ({ isAdding: false })),
-    search: async (): Promise<void> => setUi(() => ({})),
   }
 }
 export type Handlers = ReturnType<typeof handlers>
@@ -47,7 +46,7 @@ type Els = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button' | 'Input'>
 /** The «+ Aggiungi» picker: search field, one button per result, close. */
 export const picker = ({ Box, Text, Button, Input }: Els, act: Handlers, found: AzSuggestion[]) => (
   <Box key="picker" flexDirection="column" gap={1} borderStyle="round" borderColor={C.border} backgroundColor={C.surface} padding={1}>
-    <Input key={SEARCH_INPUT} label="Cerca" placeholder="nome di una risorsa o di un gruppo" submitLabel="cerca" autoFocus onSubmit={act.search} />
+    <Input key={SEARCH_INPUT} label="Cerca" placeholder="nome di una risorsa o di un gruppo" submitLabel="cerca" autoFocus onSubmit={act.press} />
     {found.map(s => (
       <Box key={`found-${s.id}`} flexDirection="row" gap={1} alignItems="center">
         <Button key={s.kind === 'group' ? keyFor('add-group', s.id) : keyFor('add', s.id)} label={`+ ${s.name}`} plain onPress={act.add} />

@@ -7,7 +7,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { DEMO_SUITE_ROWS } from '../fixtures/azure'
-import { cache, DEMO, demoState, NOW, PANE, rules, seed } from './seed'
+import { cache, DEMO, demoState, idOf, NOW, PANE, rules, seed } from './seed'
 import { dot, statusDonut, typeIcon } from './svg'
 
 const SURFACES = ['desktop', 'terminal'] as const
@@ -38,7 +38,7 @@ test('demo suite drawn', async ($, on) => {
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await ui.find({ type: 'Text', text: /^demo-suite$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /rg-demo-suite · Demo/ })).toBeDefined()
-  for (const r of DEMO_SUITE_ROWS) expect(await ui.find({ key: `open-${r.name}` })).toBeDefined()
+  for (const r of DEMO_SUITE_ROWS) expect(await ui.find({ key: `open-${r.id}` })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^Container Apps$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /13 risorse · aggiornato 30 s fa/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^Piano: Basic$/ })).toBeDefined() // acrdemosuite's key fact
@@ -63,7 +63,7 @@ test('login expired banner', async ($, on) => {
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await ui.find({ type: 'Text', text: /az login/ })).toBeDefined()
   // the snapshot stays visible under the banner
-  expect(await ui.find({ key: 'open-app-control' })).toBeDefined()
+  expect(await ui.find({ key: `open-${idOf('app-control')}` })).toBeDefined()
   await ui.unmount()
 })
 
@@ -79,7 +79,7 @@ test('terminal has no Svg', async ($, on) => {
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.findAll({ type: 'Svg' })).toHaveLength(0)
   expect(await ui.find({ type: 'Text', text: /^demo-suite$/ })).toBeDefined()
-  for (const r of DEMO_SUITE_ROWS) expect(await ui.find({ key: `open-${r.name}` })).toBeDefined()
+  for (const r of DEMO_SUITE_ROWS) expect(await ui.find({ key: `open-${r.id}` })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^Attiva$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^Problema$/ })).toBeDefined()
   await ui.unmount()

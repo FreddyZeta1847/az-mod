@@ -65,11 +65,16 @@ export const hash6 = (s: string): string => {
   return h.toString(16).padStart(8, '0').slice(0, 6)
 }
 
-/** Same key, other remote → `<key>-<hash6(remote)>` and a conflict; same repository elsewhere → moved folder. */
+/**
+ * Same key, other repository → `<key>-<hash6>` and a conflict; same repository elsewhere → moved folder.
+ * With both remotes known the remote decides; without one the folder does (a moved folder
+ * without remote then counts as another project: safer than sharing someone else's rules).
+ */
 export const resolveKey = (p: AzProject, saved: AzRules | null): { key: string; project: AzProject; mainRootMoved: boolean } => {
   if (saved === null) return { key: p.key, project: p, mainRootMoved: false }
-  const other = saved.project.remote !== null && p.remote !== null && saved.project.remote !== p.remote
-  if (other) return { key: `${p.key}-${hash6(p.remote as string)}`, project: { ...p, conflict: 'other-repo' }, mainRootMoved: false }
+  const bothRemotes = saved.project.remote !== null && p.remote !== null
+  const other = bothRemotes ? saved.project.remote !== p.remote : saved.project.mainRoot !== p.mainRoot
+  if (other) return { key: `${p.key}-${hash6(p.remote ?? p.mainRoot)}`, project: { ...p, conflict: 'other-repo' }, mainRootMoved: false }
   return { key: p.key, project: p, mainRootMoved: saved.project.mainRoot !== p.mainRoot }
 }
 
@@ -104,9 +109,15 @@ export const parseCache = (text: string | undefined, key: string): AzCache | nul
   }
 }
 
+/** The projects folder under the plugin's data folder; without one nothing is written (never the user's repository). */
+export const dataDirFrom = (env: Record<string, string>): string => {
+  const base = env.CLAUDE_PLUGIN_DATA
+  if (base === undefined || base.trim() === '') throw new Error('az-mod: no CLAUDE_PLUGIN_DATA, nothing is written')
+  return `${base.replace(/[\\/]+$/, '')}/projects`
+}
+
 export async function dataDir($: EngineInterface): Promise<string> {
-  const env = await $.process.hookEnv()
-  return `${(env.CLAUDE_PLUGIN_DATA ?? '.').replace(/[\\/]+$/, '')}/projects`
+  return dataDirFrom(await $.process.hookEnv())
 }
 
 export async function readText($: EngineInterface, path: string): Promise<string | undefined> {

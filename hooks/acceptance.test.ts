@@ -223,7 +223,7 @@ test('pane buttons reach Raccolta', async ($, on) => {
   await waitFor(() => idle(w))
 
   // opening a row records it in the pane's own state and shows its details
-  await ui.press({ key: 'open-app-control' })
+  await ui.press({ key: `open-${idOf('app-control')}` })
   await waitFor(() => w.seen.ui?.openCard === idOf('app-control'))
   expect(await ui.find({ text: /Apri nel portale/ })).toBeDefined()
   await ui.unmount()

@@ -26,7 +26,7 @@ export const healthAtom = atom({ plugin: 'az-mod', key: 'health' } as const,
   { az: 'ok', isLeaseHolder: false, nextAutoAt: null, rulesMode: 'ok' }, { shape: 'health-1' })
 export const foundAtom = atom({ plugin: 'az-mod', key: 'found' } as const, [], { shape: 'found-1' })
 export const uiAtom = atom({ plugin: 'az-mod', key: 'ui' } as const,
-  { isVisible: false, lastInputAt: 0, openCard: null, closed: [], showAuto: false, showHidden: false, isAdding: false }, { shape: 'ui-1' })
+  { lastInputAt: 0, openCard: null, closed: [], showAuto: false, showHidden: false, isAdding: false }, { shape: 'ui-1' })
 
 /** Which facts each resource type shows (keys of lowercase ARM types). Raccolta reads them, the pane labels them. */
 export const FACTS_BY_TYPE: Record<string, AzFactKey[]> = {
@@ -68,7 +68,7 @@ export type PaneAction =
   | 'open' | 'refresh' | 'add' | 'exclude' | 'restore' | 'accept' | 'dismiss' | 'add-group' | 'remove-group'
 /** Keys with no argument: the key is the action. */
 const PLAIN_ACTIONS: PaneAction[] = ['update', 'scan', 'refresh-cost', 'reset-rules', 'undo-auto']
-/** Keys `<action>-<arg>`: open takes a resource name, refresh/add/exclude/restore an AzId, accept/dismiss a suggestion id, add-group/remove-group an AzGroupId. Longest prefix first. */
+/** Keys `<action>-<arg>`: open takes a resource id (two resources may share a name), refresh/add/exclude/restore an AzId, accept/dismiss a suggestion id, add-group/remove-group an AzGroupId. Longest prefix first. */
 const ARG_ACTIONS: PaneAction[] = ['remove-group', 'add-group', 'open', 'refresh', 'add', 'exclude', 'restore', 'accept', 'dismiss']
 export const SEARCH_INPUT = 'add-search'
 
