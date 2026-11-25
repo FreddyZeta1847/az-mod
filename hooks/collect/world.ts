@@ -30,6 +30,8 @@ export type WorldOptions = {
   placed?: boolean
   /** What a tool call answers beneath the mod (default: an empty result). */
   toolResult?: object
+  /** Every tool call ends in error (a failed or denied command). */
+  toolFails?: boolean
 }
 export type World = {
   files: Map<string, string>; runs: string[][]; seen: Seen; written: string[]; clock: MockClock
@@ -102,7 +104,7 @@ export const startWorld = (on: On, options: WorldOptions = {}): World => {
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('command.register', () => ({ value: { command: 'az' } }))
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
-  on('tool.call', () => ({ result: options.toolResult ?? {} }))
+  on('tool.call', () => (options.toolFails === true ? { result: options.toolResult ?? {}, isError: true } : { result: options.toolResult ?? {} }))
   on('state.set', ($, e, next) => {
     const change = e as unknown as { plugin: string; key: string; value: unknown }
     if (change.plugin === 'az-mod') {

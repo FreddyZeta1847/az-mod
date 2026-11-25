@@ -6,11 +6,12 @@
  */
 import { expect, test } from 'claude-code/testing'
 
-import { bodyFileFor, isGoneMessage, markGone, rowToCard, SHOW_QUERY } from './graph'
+import { bodyFileFor, buildQuery, isGoneMessage, markGone, rowToCard, SHOW_QUERY } from './graph'
 import { parseAz } from './parse-az'
-import { projectFrom } from './project'
+import { projectFrom, stripUserinfo } from './project'
+import { rankSearch } from './rules-ops'
 import { cleanValue } from './secrets'
-import { dataDirFrom, resolveKey } from './store'
+import { dataDirFrom, planSave, resolveKey } from './store'
 import { NOW, result, startWorld } from './world'
 import { DEMO_SUITE_ROWS, gid, RESOURCE_LIST, rid } from '../fixtures/azure'
 import type { GraphRow } from '../fixtures/azure'
@@ -33,10 +34,10 @@ const rulesOf = (p: AzProject): AzRules => ({
 
 // ---------------------------------------------------------------- pure helpers
 
-test('f1 each query and page has its own body file', async () => {
+test('f1 each query has its own body file', async () => {
   expect(bodyFileFor('/d', 's', 'q1')).not.toBe(bodyFileFor('/d', 's', 'q2'))
   expect(bodyFileFor('/d', 's', 'q1')).toBe(bodyFileFor('/d', 's', 'q1'))
-  expect(bodyFileFor('/d', 's', 'q1', 'tok')).not.toBe(bodyFileFor('/d', 's', 'q1'))
+  expect(bodyFileFor('/d', 's2', 'q1')).not.toBe(bodyFileFor('/d', 's', 'q1'))
   expect(bodyFileFor('/d', 's', 'q1').startsWith('/d/graph-')).toBe(true)
 })
 
@@ -148,5 +149,98 @@ test('f9 accepting a group puts it among the groups', async ($, on) => {
   await ui.press({ key: `accept-${old}` })
   await w.waitFor(() => old in (w.seen.rules?.groups ?? {}))
   expect(old in (w.seen.rules?.includes ?? {})).toBe(false)
+  await ui.unmount()
+})
+
+// ================================================================ review round 2
+
+test('g2 the project query names each group with its subscription', async () => {
+  const q = buildQuery([gid('rg-demo-suite')], [])
+  expect(q).toContain(`'${gid('rg-demo-suite')}'`)
+  expect(q).toContain('subscriptionId')
+})
+
+test('g8 an ssh remote is the same repository as its https address', async () => {
+  expect(stripUserinfo('git@github.com:Example/Site.git')).toBe('https://github.com/Example/Site')
+  expect(stripUserinfo('ssh://git@github.com/example/site.git')).toBe('https://github.com/example/site')
+})
+
+test('g9 the pages of one query share one body file', async () => {
+  expect(bodyFileFor('/d', 's', 'q1', 'tok-1')).toBe(bodyFileFor('/d', 's', 'q1', 'tok-2'))
+})
+
+test('g10 the same folder spelled differently is the same project', async () => {
+  const saved = rulesOf(project({ mainRoot: 'C:\\work\\api\\' }))
+  expect(resolveKey(project({ mainRoot: 'c:/work/api' }), saved).key).toBe('api')
+})
+
+test('g13 a pipe with the word az is not an az command', async () => {
+  expect(parseAz('ls | grep az', NOW, 's1')).toBe(null)
+  expect(parseAz('az webapp list | jq .', NOW, 's1')).toBe('unclear')
+  expect(parseAz('cd x && az webapp list', NOW, 's1')).toBe('unclear')
+})
+
+test('g14 g15 the secret filter on long runs', async () => {
+  const sha1 = 'a3f1c9e07b2d4458c0e6f19a2b7d3c5e8f0a1b2c'
+  expect(cleanValue(`acr.io/app:${sha1}`)).toBe(`acr.io/app:${sha1}`)
+  expect(cleanValue(`token ${sha1}ab12`)).toBeUndefined()
+  expect(cleanValue('Ab1_cD2-eF3_gH4-iJ5_kL6-mN7_oP8-qR9_sT0-uV1_wX2')).toBeUndefined()
+  expect(cleanValue('https://github.com/example/a-very-long-repository-name-for-the-demo')).toBe('https://github.com/example/a-very-long-repository-name-for-the-demo')
+})
+
+test('g16 g17 only clean ids and short command words are kept', async () => {
+  const e = parseAz(`az resource delete --ids ${idOf('app-match')}?sig=abc`, NOW, 's1')
+  expect(e !== null && e !== 'unclear' ? e.ids : e).toBeUndefined()
+  expect(parseAz(`./deploy.sh az ${'k'.repeat(40)}`, NOW, 's1')).toBe(null)
+})
+
+test('g18 a touched resource with capitals ranks first', async () => {
+  const rows = [{ id: rid('rg-x', 'microsoft.web/sites', 'Zeta'), name: 'Zeta', type: 'microsoft.web/sites', resourceGroup: 'rg-x' },
+    { id: rid('rg-x', 'microsoft.web/sites', 'MyApi'), name: 'MyApi', type: 'microsoft.web/sites', resourceGroup: 'rg-x' }]
+  const found = rankSearch(rows, '', { key: 'demo', touched: ['myapi'], rules: null })
+  expect([found[0]?.name, found[0]?.reason]).toEqual(['MyApi', 'claude-wrote'])
+})
+
+test('g19 a broken rules file is never copied into the backup', async () => {
+  expect(planSave('/d', 'k', '{ broken', rulesOf(project())).length).toBe(1)
+})
+
+test('g1 after a failed first Scan, Update scans again', async ($, on) => {
+  let lists = 0
+  const w = startWorld(on, {
+    az: argv => (argv[1] === 'resource' && argv[2] === 'list' && ++lists === 1 ? result(1, '', "ERROR: Please run 'az login' to setup account.") : undefined),
+  })
+  await $.session.start({ cwd: '/work/demo-suite', surface: 'desktop', isInteractive: true })
+  await w.waitFor(() => w.seen.health?.az === 'login' && w.idle())
+  expect(w.seen.rules ?? null).toBe(null)
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'update' })
+  await w.waitFor(() => w.seen.rules != null && Object.keys(w.seen.cache?.resources ?? {}).length === 13)
+  await ui.unmount()
+})
+
+test('g6 a failed az command proposes nothing', async ($, on) => {
+  const w = startWorld(on, { toolFails: true })
+  await w.start($)
+  await $.tool.call({ tool: 'Bash', command: 'az webapp create -n tasklist -g rg-tasklist' })
+  await w.waitFor(() => (w.seen.events ?? []).some(e => e.verb === 'create'))
+  await w.pause(150)
+  expect((w.seen.suggestions ?? []).some(s => s.origin === 'hook')).toBe(false)
+})
+
+test('g3 g4 an Update asked during another one runs after it, with the latest rules', async ($, on) => {
+  const w = startWorld(on)
+  await w.start($)
+  const ui = await $.ui.mount(PANE)
+  const old = gid('rg-demo-suite-old')
+  w.runs.length = 0
+  await ui.press({ key: 'update' })
+  await ui.press({ key: `accept-${old}` })
+  await w.waitFor(() => old in (w.seen.rules?.groups ?? {}) && w.idle())
+  await w.pause(100)
+  // two Resource Graph reads: the running one and the one asked during it (the second sees the new group)
+  const bodies = [...w.files.entries()].filter(([k]) => k.includes('/graph-')).map(([, v]) => v)
+  expect(bodies.some(b => b.includes('rg-demo-suite-old'))).toBe(true)
+  expect(w.runs.filter(a => a[1] === 'rest').length).toBeGreaterThan(1)
   await ui.unmount()
 })

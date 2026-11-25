@@ -41,7 +41,7 @@ export const rankSearch = (list: ScanRow[], text: string, ctx: { key: string; to
   const inProject = (id: string): boolean =>
     r !== null && (id in r.includes || groupIdOf(id) in r.groups || (isGroupId(id) && id in r.groups))
   const score = (s: AzSuggestion): number =>
-    (ctx.touched.includes(s.name) ? 2 : 0) + (s.name.toLowerCase().includes(ctx.key) ? 1 : 0)
+    (ctx.touched.includes(s.name.toLowerCase()) ? 2 : 0) + (s.name.toLowerCase().includes(ctx.key) ? 1 : 0)
   const groups = new Map<string, AzSuggestion>()
   const resources: AzSuggestion[] = []
   for (const row of list) {
@@ -49,7 +49,7 @@ export const rankSearch = (list: ScanRow[], text: string, ctx: { key: string; to
     const prev = groups.get(g)
     if (prev !== undefined) prev.count = (prev.count ?? 0) + 1
     else groups.set(g, { id: g, kind: 'group', origin: 'scan', reason: 'similar-group', name: row.resourceGroup, count: 1 })
-    resources.push({ id: row.id.toLowerCase(), kind: 'resource', origin: 'scan', reason: ctx.touched.includes(row.name) ? 'claude-wrote' : 'similar-group',
+    resources.push({ id: row.id.toLowerCase(), kind: 'resource', origin: 'scan', reason: ctx.touched.includes(row.name.toLowerCase()) ? 'claude-wrote' : 'similar-group',
       name: row.name, type: row.type.toLowerCase() })
   }
   return [...resources, ...groups.values()]

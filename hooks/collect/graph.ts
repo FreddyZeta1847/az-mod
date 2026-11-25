@@ -66,14 +66,16 @@ export const SHOW_QUERY = `{${[
   'registryServer:properties.configuration.registries[0].server',
 ].join(',')}}`
 
-const SAFE_GROUP = /^[A-Za-z0-9._()-]+$/
-const SAFE_ID = /^\/subscriptions\/[a-z0-9/._()-]+$/
+/** An id (or group id) as Azure writes it, lowercased: the only text that ever enters a query. */
+export const SAFE_ID = /^\/subscriptions\/[a-z0-9/._()-]+$/
 const list = (xs: string[]): string => xs.map(x => `'${x}'`).join(', ')
 
-export const buildQuery = (groups: string[], ids: AzId[]): string => {
-  const g = groups.filter(x => SAFE_GROUP.test(x))
+/** Groups by their full id (subscription included: another subscription may have a group with the same name), plus single ids. */
+export const buildQuery = (groupIds: string[], ids: AzId[]): string => {
+  const g = groupIds.map(x => x.toLowerCase()).filter(x => SAFE_ID.test(x))
   const i = ids.filter(x => SAFE_ID.test(x))
-  const where = [g.length > 0 ? `resourceGroup in~ (${list(g)})` : '', i.length > 0 ? `tolower(id) in (${list(i)})` : '']
+  const groupId = "tolower(strcat('/subscriptions/', subscriptionId, '/resourcegroups/', resourceGroup))"
+  const where = [g.length > 0 ? `${groupId} in (${list(g)})` : '', i.length > 0 ? `tolower(id) in (${list(i)})` : '']
     .filter(Boolean).join(' or ')
   const project = Object.entries(COLUMNS).map(([k, v]) => `${k} = ${v}`).join(', ')
   return `resources | where ${where || 'false'} | project ${project}`
@@ -171,7 +173,7 @@ export const linkRegistries = (cards: Record<AzId, AzCard>, rows: GraphRow[]): v
 }
 
 type Scope = Pick<AzRules, 'groups' | 'includes'>
-const inScope = (card: AzCard, scope: Scope): boolean => groupIdOf(card.id) in scope.groups || card.id in scope.includes
+export const inScope = (card: AzCard, scope: Scope): boolean => groupIdOf(card.id) in scope.groups || card.id in scope.includes
 
 /** New cards (keeping the cost a previous card had), plus the previous ones still in scope that Azure no longer lists, kept with `goneAt`. */
 export const markGone = (prev: Record<AzId, AzCard>, next: Record<AzId, AzCard>, now: number, scope: Scope): Record<AzId, AzCard> => {
@@ -187,9 +189,13 @@ const viaOf = (id: AzId, scope: Scope): AzCard['via'] => (groupIdOf(id) in scope
 
 // ---------------------------------------------------------------- reads
 
-/** One body file per query and page: two reads at once (two sessions, Update during Scan) never share one. */
-export const bodyFileFor = (dir: string, subId: string, query: string, skipToken?: string): string =>
-  `${dir}/graph-${hash6(`${subId}\n${query}\n${skipToken ?? ''}`)}.json`
+/**
+ * One body file per query: two different reads at once (two sessions, Update during Scan) never
+ * share one; the pages of one query reuse it (their bodies are written and read one after another),
+ * so files never pile up ($.fs cannot delete). The page token is not part of the name.
+ */
+export const bodyFileFor = (dir: string, subId: string, query: string, _skipToken?: string): string =>
+  `${dir}/graph-${hash6(`${subId}\n${query}`)}.json`
 
 async function graphPage($: EngineInterface, dir: string, query: string, subId: string, skipToken?: string): Promise<AzRun> {
   const bodyPath = bodyFileFor(dir, subId, query, skipToken)
@@ -215,11 +221,9 @@ export async function graphRows($: EngineInterface, query: string, subId: string
   return { ok: true, rows }
 }
 
-const groupName = (g: string): string => g.slice(g.lastIndexOf('/') + 1)
-
 export async function readProject($: EngineInterface, rules: Scope, subId: string):
   Promise<{ ok: true; cards: Record<AzId, AzCard> } | Extract<AzRun, { ok: false }>> {
-  const r = await graphRows($, buildQuery(Object.keys(rules.groups).map(groupName), Object.keys(rules.includes)), subId)
+  const r = await graphRows($, buildQuery(Object.keys(rules.groups), Object.keys(rules.includes)), subId)
   if (!r.ok) return r
   const now = await $.clock.now()
   const cards: Record<AzId, AzCard> = {}
@@ -231,7 +235,7 @@ export async function readProject($: EngineInterface, rules: Scope, subId: strin
   return { ok: true, cards }
 }
 
-export type OneRead = { ok: true; card: AzCard; row: GraphRow } | { ok: true; gone: true } | Extract<AzRun, { ok: false }>
+type OneRead = { ok: true; card: AzCard; row: GraphRow } | { ok: true; gone: true } | Extract<AzRun, { ok: false }>
 
 /** The resource, or its whole group, no longer exists. */
 export const isGoneMessage = (message: string): boolean => /ResourceNotFound|ResourceGroupNotFound|was not found|could not be found/i.test(message)

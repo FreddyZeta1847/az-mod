@@ -53,8 +53,9 @@ test('error message never carries stdout', async () => {
 // ---------------------------------------------------------------- E2 graph and cards
 
 test('demo suite gives 13 cards', async () => {
-  const q = buildQuery(['rg-demo-suite'], ['/subscriptions/0/resourcegroups/rg-x/providers/a/b/c'])
-  expect(q.includes("'rg-demo-suite'")).toBe(true)
+  // groups travel as full ids, subscription included (review round 2, g2)
+  const q = buildQuery([gid('rg-demo-suite')], ['/subscriptions/0/resourcegroups/rg-x/providers/a/b/c'])
+  expect(q.includes(`'${gid('rg-demo-suite')}'`)).toBe(true)
   expect(/\bproperties\b(?!\.)/.test(q)).toBe(false)
   for (const column of Object.keys(rowOf('app-control')).filter(k => k !== 'env')) expect(q.includes(`${column} =`) || q.includes(`, ${column},`) || q.includes(` ${column},`)).toBe(true)
   const cards = DEMO_SUITE_ROWS.map(r => rowToCard(r, NOW, 'group'))

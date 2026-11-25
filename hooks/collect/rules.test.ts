@@ -33,15 +33,18 @@ test('project without git', async ($, on) => {
 test('remote token stripped', async () => {
   expect(stripUserinfo('https://u:ghp_abc@github.com/x/y.git')).toBe('https://github.com/x/y')
   expect(stripUserinfo('https://GitHub.com/x/y')).toBe('https://github.com/x/y')
-  expect(stripUserinfo('git@github.com:x/y.git')).toBe('git@github.com:x/y')
+  // an ssh clone has the same address as its https one (review round 2, g8)
+  expect(stripUserinfo('git@github.com:x/y.git')).toBe('https://github.com/x/y')
 })
 
 // ---------------------------------------------------------------- C2 files
 
 test('bak written before save', async () => {
-  const writes = planSave('/data/projects', 'demo-suite', '{"old":1}', rules())
+  // the previous text is backed up only when it is a good rules file (review round 2, g19)
+  const previous = JSON.stringify(rules())
+  const writes = planSave('/data/projects', 'demo-suite', previous, rules())
   expect(writes.map(x => x[0])).toEqual(['/data/projects/demo-suite.rules.bak.json', '/data/projects/demo-suite.rules.json'])
-  expect(writes[0]?.[1]).toBe('{"old":1}')
+  expect(writes[0]?.[1]).toBe(previous)
   expect(planSave('/data/projects', 'demo-suite', undefined, rules()).length).toBe(1)
 })
 

@@ -9,8 +9,13 @@ import type { AzEvent } from '../../types'
 
 /** A name or group as Azure allows it, compared lowercased (Azure names are case-insensitive). */
 const CLEAN = /^[a-z0-9][a-z0-9._()-]{0,89}$/
-const CLEAN_ID = /^\/subscriptions\/[^\s"'`$;|&<>]+$/
-const WORD = /^[a-z0-9-]+$/
+/** Allow-list, the same as graph.ts SAFE_ID: anything else (?sig=…, %, #) is never kept. */
+const CLEAN_ID = /^\/subscriptions\/[a-z0-9/._()-]+$/
+/** A command word of az: short, a letter first (a token or a hash never passes). */
+const WORD = /^[a-z][a-z0-9-]{0,29}$/
+const MAX_WORDS = 6
+/** az starts a command: first, or right after a chain or a subshell. */
+const STARTS = /^(?:;|&&|\|\||\||\(|&)$/
 const UNCLEAR = /[;|&\n\r`$]/
 
 const unquote = (t: string): string => t.replace(/^["']|["']$/g, '')
@@ -41,14 +46,14 @@ const idsAfter = (args: string[]): string[] => {
 
 export const parseAz = (command: string, now: number, sessionId: string): AzEvent | 'unclear' | null => {
   const tokens = tokenize(command)
-  const azAt = tokens.indexOf('az')
+  const azAt = tokens.findIndex((t, i) => t === 'az' && (i === 0 || STARTS.test(tokens[i - 1] as string)))
   if (azAt < 0) return null
   if (UNCLEAR.test(command)) return 'unclear'
   const args = splitEquals(tokens.slice(azAt + 1))
   const firstFlag = args.findIndex(a => a.startsWith('-'))
   const words = firstFlag < 0 ? args : args.slice(0, firstFlag)
   // `grep -rn az hooks/`: the word az alone, no az command after it
-  if (words.length === 0 || !words.every(w => WORD.test(w))) return null
+  if (words.length === 0 || words.length > MAX_WORDS || !words.every(w => WORD.test(w))) return null
   const verb = words[words.length - 1] as string
   const event: AzEvent = {
     at: now, sessionId, cmdGroup: words.slice(0, -1).join(' '), verb, isWrite: WRITE_VERBS.includes(verb), exit: 0,

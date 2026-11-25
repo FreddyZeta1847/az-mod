@@ -23,9 +23,17 @@ export const mainRootFrom = (x: { root: string; vcsMainRoot: string | null; comm
 export const projectFrom = (mainRoot: string, remote: string | null): AzProject =>
   ({ key: normalizeName(basename(mainRoot)) || `p-${hash6(mainRoot)}`, mainRoot, remote })
 
-/** 'https://u:token@GitHub.com/x/y.git' → 'https://github.com/x/y'; scp form keeps its user (no secret). */
+/**
+ * One spelling per repository: 'https://u:token@GitHub.com/x/y.git' → 'https://github.com/x/y';
+ * ssh forms ('git@host:x/y', 'ssh://git@host/x/y') → 'https://host/x/y', so a clone over ssh
+ * matches the https address Azure keeps.
+ */
 export const stripUserinfo = (url: string): string => {
   const trimmed = url.trim().replace(/\.git$/, '')
+  const scp = /^[^@/:\s]+@([^:/\s]+):(?!\/)(.+)$/.exec(trimmed)
+  if (scp !== null) return `https://${(scp[1] as string).toLowerCase()}/${scp[2] as string}`
+  const ssh = /^ssh:\/\/(?:[^@/]*@)?([^/:]+)(?::\d+)?\/(.+)$/i.exec(trimmed)
+  if (ssh !== null) return `https://${(ssh[1] as string).toLowerCase()}/${ssh[2] as string}`
   const m = /^([a-z][a-z0-9+.-]*:\/\/)(?:[^@/]*@)?([^/]+)(.*)$/i.exec(trimmed)
   if (m === null) return trimmed
   const [, scheme = '', host = '', rest = ''] = m

@@ -12,18 +12,18 @@ import type { EngineInterface } from 'claude-code'
 import type { AzCache, AzProject, AzRules } from '../../types'
 
 export type RulesMode = 'ok' | 'read-only' | 'broken'
-export const LEASE_MS = 60_000
+const LEASE_MS = 60_000
 
-export const rulesPath = (dir: string, key: string): string => `${dir}/${key}.rules.json`
-export const bakPath = (dir: string, key: string): string => `${dir}/${key}.rules.bak.json`
-export const cachePath = (dir: string, key: string): string => `${dir}/${key}.cache.json`
+const rulesPath = (dir: string, key: string): string => `${dir}/${key}.rules.json`
+const bakPath = (dir: string, key: string): string => `${dir}/${key}.rules.bak.json`
+const cachePath = (dir: string, key: string): string => `${dir}/${key}.cache.json`
 
 export const emptyRules = (p: AzProject, now: number): AzRules => ({
   schemaVersion: 1, project: { key: p.key, mainRoot: p.mainRoot, remote: p.remote },
   groups: {}, includes: {}, excludes: {}, dismissed: {}, updatedAt: now,
 })
 
-export class NewerVersion extends Error {}
+class NewerVersion extends Error {}
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
@@ -70,18 +70,22 @@ export const hash6 = (s: string): string => {
  * With both remotes known the remote decides; without one the folder does (a moved folder
  * without remote then counts as another project: safer than sharing someone else's rules).
  */
+/** A folder in one spelling: on Windows `c:\x` and `C:/x/` are the same folder. */
+const samePath = (path: string): string => path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+
 export const resolveKey = (p: AzProject, saved: AzRules | null): { key: string; project: AzProject; mainRootMoved: boolean } => {
   if (saved === null) return { key: p.key, project: p, mainRootMoved: false }
   const bothRemotes = saved.project.remote !== null && p.remote !== null
-  const other = bothRemotes ? saved.project.remote !== p.remote : saved.project.mainRoot !== p.mainRoot
+  const other = bothRemotes ? saved.project.remote !== p.remote : samePath(saved.project.mainRoot) !== samePath(p.mainRoot)
   if (other) return { key: `${p.key}-${hash6(p.remote ?? p.mainRoot)}`, project: { ...p, conflict: 'other-repo' }, mainRootMoved: false }
-  return { key: p.key, project: p, mainRootMoved: saved.project.mainRoot !== p.mainRoot }
+  return { key: p.key, project: p, mainRootMoved: samePath(saved.project.mainRoot) !== samePath(p.mainRoot) }
 }
 
-/** The writes of one save, in order: the backup of the previous text first, then the new file. */
+/** The writes of one save: the backup of the previous text first — only when it is a good rules file, so a broken one never replaces a good backup — then the new file. */
 export const planSave = (dir: string, key: string, previous: string | undefined, rules: AzRules): Array<[string, string]> => {
   const next: [string, string] = [rulesPath(dir, key), JSON.stringify(rules, null, 1)]
-  return previous === undefined ? [next] : [[bakPath(dir, key), previous], next]
+  const prev = parse(previous)
+  return prev === null || !('rules' in prev) ? [next] : [[bakPath(dir, key), previous as string], next]
 }
 
 /** «Riparti da zero»: keep the broken text aside, then start from empty rules. */

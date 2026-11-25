@@ -19,7 +19,7 @@ export const intervalFor = (now: number, lastInputAt: number): number =>
 export const backoffMs = (failures: number): number =>
   (BACKOFF_MIN[Math.min(Math.max(failures, 1), BACKOFF_MIN.length) - 1] as number) * 60_000
 
-export type TickState = {
+type TickState = {
   now: number; placed: boolean; lastInputAt: number; stateAt: number | undefined
   backoffUntil: number; isLoginStopped: boolean
 }

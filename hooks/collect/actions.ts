@@ -11,7 +11,7 @@ import type { EngineInterface } from 'claude-code'
 
 import { currentSubscription, runAz } from './az'
 import type { AzRun } from './az'
-import { graphRows, linkRegistries, markGone, readOne, readProject } from './graph'
+import { graphRows, inScope, linkRegistries, markGone, readOne, readProject } from './graph'
 import { resolveProject } from './project'
 import { cacheForSubscription, loop, noteError, noteSuccess, resume, shouldRefresh, intervalFor, TICK_MS } from './refresh'
 import { addGroupTo, dismissIn, excludeIn, includeIn, isGroupId, rankSearch, removeGroupFrom, restoreIn } from './rules-ops'
@@ -37,8 +37,11 @@ const foundAtom = atom({ plugin: 'az-mod', key: 'found' } as const, [], { shape:
 const uiAtom = atom({ plugin: 'az-mod', key: 'ui' } as const,
   { lastInputAt: 0, openCard: null, closed: [], showAuto: false, showHidden: false, isAdding: false }, { shape: 'ui-1' })
 
-/** The last `az resource list` read in this module load (search and hook proposals rank it). */
-const mem = { lastList: [] as ScanRow[] }
+/**
+ * This module load's memory: the last `az resource list` read (search and hook proposals rank
+ * it), the read in flight (one at a time), and whether an Update was asked during a running one.
+ */
+const mem = { lastList: [] as ScanRow[], listing: undefined as Promise<boolean> | undefined, again: false }
 
 const LIST_QUERY = '[].{id:id,name:name,type:type,resourceGroup:resourceGroup}'
 const ENRICH_QUERY = "resources | where type in~ ('microsoft.web/staticsites', 'microsoft.app/containerapps') "
@@ -102,10 +105,16 @@ async function offer($: EngineInterface, list: AzSuggestion[], replaceOrigins: A
 
 // ---------------------------------------------------------------- reads
 
-async function readList($: EngineInterface): Promise<boolean> {
+/** Reads the subscription's resource list, one read at a time (keystrokes in the search share it). `quiet`: a failure starts no backoff. */
+async function readList($: EngineInterface, quiet = false): Promise<boolean> {
+  mem.listing ??= listOnce($, quiet).finally(() => { mem.listing = undefined })
+  return mem.listing
+}
+
+async function listOnce($: EngineInterface, quiet: boolean): Promise<boolean> {
   const r = await runAz($, ['resource', 'list', '--query', LIST_QUERY], 120_000)
   if (!r.ok) {
-    await noteFailure($, r)
+    if (!quiet) await noteFailure($, r)
     return false
   }
   const rows = (Array.isArray(r.json) ? r.json : []) as ScanRow[]
@@ -133,41 +142,68 @@ const relatedOf = (cache: AzCache, rules: AzRules): AzSuggestion[] => {
 
 // ---------------------------------------------------------------- actions
 
-/** Update: re-reads every group and include of the project from Resource Graph. Never proposes, but related resources. */
-export async function updateProject($: EngineInterface): Promise<void> {
+/**
+ * Update: re-reads every group and include of the project from Resource Graph. Never proposes,
+ * but related resources. No rules yet (the first Scan failed) → it scans again instead. Asked
+ * while one runs → it runs once more right after. The photo is built with the rules as they are
+ * when Azure answers, so a group added or removed meanwhile is never undone.
+ */
+async function updateProject($: EngineInterface): Promise<void> {
   const project = await read($, projectAtom)
-  const rules = await read($, rulesAtom)
-  // one Update at a time: a press or the hook during a running Update (timer, Scan) adds nothing
-  if (project === null || rules === null || (await read($, busyAtom)).update) return
+  if (project === null) return
+  const busy = await read($, busyAtom)
+  if ((await read($, rulesAtom)) === null) {
+    if (!busy.scan && (await read($, healthAtom)).rulesMode === 'ok') await scanProject($, true)
+    return
+  }
+  if (busy.update) {
+    mem.again = true
+    return
+  }
   await setBusy($, { update: true })
   try {
-    const sub = await currentSubscription($)
-    if (!sub.ok) return await noteFailure($, sub)
-    const cache = cacheForSubscription(await read($, cacheAtom), sub.sub, project.key)
-    const r = await readProject($, rules, sub.sub.id)
-    if (!r.ok) return await noteFailure($, r)
-    const now = await $.clock.now()
-    const { state: _old, ...errors } = cache.errors
-    const next: AzCache = {
-      ...cache, errors, stateAt: now, resources: markGone(cache.resources, r.cards, now, rules),
-      groups: Object.fromEntries(Object.keys(rules.groups).map(g => [g, { name: g.slice(g.lastIndexOf('/') + 1) }])),
-    }
-    const isLeaseHolder = takeLease(next, await $.session.id(), now)
-    await setCache($, next)
-    await setHealth($, { az: 'ok', isLeaseHolder })
-    noteSuccess()
-    await offer($, relatedOf(next, rules), ['related'])
+    await readAndPublish($, project.key)
   } catch {
     // shortcut: an unexpected failure only ends this Update; the next tick or press tries again
   } finally {
     await setBusy($, { update: false })
+    if (mem.again) {
+      mem.again = false
+      void updateProject($)
+    }
   }
 }
 
+async function readAndPublish($: EngineInterface, key: string): Promise<void> {
+  const asked = await read($, rulesAtom)
+  if (asked === null) return
+  const sub = await currentSubscription($)
+  if (!sub.ok) return await noteFailure($, sub)
+  const r = await readProject($, asked, sub.sub.id)
+  if (!r.ok) return await noteFailure($, r)
+  // the rules and the photo as they are now: a press during the read must not be undone
+  const rules = (await read($, rulesAtom)) ?? asked
+  if (rules.updatedAt !== asked.updatedAt) mem.again = true
+  const cache = cacheForSubscription(await read($, cacheAtom), sub.sub, key)
+  const now = await $.clock.now()
+  const cards = Object.fromEntries(Object.entries(r.cards).filter(([, c]) => inScope(c, rules)))
+  const { state: _old, ...errors } = cache.errors
+  const next: AzCache = {
+    ...cache, errors, stateAt: now, resources: markGone(cache.resources, cards, now, rules),
+    groups: Object.fromEntries(Object.keys(rules.groups).map(g => [g, { name: g.slice(g.lastIndexOf('/') + 1) }])),
+  }
+  const isLeaseHolder = takeLease(next, await $.session.id(), now)
+  await setCache($, next)
+  await setHealth($, { az: 'ok', isLeaseHolder })
+  noteSuccess()
+  await offer($, relatedOf(next, rules), ['related'])
+}
+
 /** Scan: re-reads the subscription's resource list and proposes; the first time it also adopts the sure group. */
-export async function scanProject($: EngineInterface, isFirst = false): Promise<void> {
+async function scanProject($: EngineInterface, isFirst = false): Promise<void> {
   const project = await read($, projectAtom)
-  if (project === null) return
+  // one Scan at a time: the first one at boot and a press must not both write the rules from empty
+  if (project === null || (await read($, busyAtom)).scan) return
   await setBusy($, { scan: true })
   try {
     if (!(await readList($))) return
@@ -203,7 +239,7 @@ async function adoptFirst($: EngineInterface, sure: string | null): Promise<void
   await change($, autoAddedAtom, () => ({ groupId: sure, count: mem.lastList.filter(r => groupIdOf(r.id) === sure).length }))
 }
 
-export async function refreshOne($: EngineInterface, id: AzId): Promise<void> {
+async function refreshOne($: EngineInterface, id: AzId): Promise<void> {
   const rules = await read($, rulesAtom)
   const cache = await read($, cacheAtom)
   if (rules === null || cache === null) return
@@ -238,7 +274,7 @@ async function dropGroupCards($: EngineInterface, groupId: string, rules: AzRule
   await setCache($, { ...cache, resources })
 }
 
-export async function includeResource($: EngineInterface, id: AzId): Promise<void> {
+async function includeResource($: EngineInterface, id: AzId): Promise<void> {
   if (isGroupId(id)) return addGroup($, id)
   const rules = await currentRules($)
   if (rules === null || !(await setRules($, includeIn(rules, id, await $.clock.now())))) return
@@ -246,24 +282,24 @@ export async function includeResource($: EngineInterface, id: AzId): Promise<voi
   await refreshOne($, id)
 }
 
-export async function excludeResource($: EngineInterface, id: AzId): Promise<void> {
+async function excludeResource($: EngineInterface, id: AzId): Promise<void> {
   const rules = await currentRules($)
   if (rules !== null) await setRules($, excludeIn(rules, id, await $.clock.now()))
 }
 
-export async function restoreResource($: EngineInterface, id: AzId): Promise<void> {
+async function restoreResource($: EngineInterface, id: AzId): Promise<void> {
   const rules = await currentRules($)
   if (rules !== null) await setRules($, restoreIn(rules, id, await $.clock.now()))
 }
 
-export async function addGroup($: EngineInterface, groupId: string): Promise<void> {
+async function addGroup($: EngineInterface, groupId: string): Promise<void> {
   const rules = await currentRules($)
   if (rules === null || !(await setRules($, addGroupTo(rules, groupId, await $.clock.now())))) return
   await dropSuggestion($, groupId)
   await updateProject($)
 }
 
-export async function removeGroup($: EngineInterface, groupId: string): Promise<void> {
+async function removeGroup($: EngineInterface, groupId: string): Promise<void> {
   const rules = await currentRules($)
   if (rules === null) return
   const next = removeGroupFrom(rules, groupId, await $.clock.now())
@@ -271,7 +307,7 @@ export async function removeGroup($: EngineInterface, groupId: string): Promise<
 }
 
 /** «No» to a proposal; on the auto-added group («Annulla») it also takes the group and its cards out. */
-export async function dismissSuggestion($: EngineInterface, id: string): Promise<void> {
+async function dismissSuggestion($: EngineInterface, id: string): Promise<void> {
   const rules = await currentRules($)
   if (rules === null) return
   const next = dismissIn(rules, id, await $.clock.now())
@@ -280,13 +316,13 @@ export async function dismissSuggestion($: EngineInterface, id: string): Promise
   if (id in rules.groups) await dropGroupCards($, id, next)
 }
 
-export async function undoAuto($: EngineInterface): Promise<void> {
+async function undoAuto($: EngineInterface): Promise<void> {
   const auto = await read($, autoAddedAtom)
   if (auto !== null) await dismissSuggestion($, auto.groupId)
 }
 
 /** «Riparti da zero»: the broken file is kept aside, the rules start empty, Scan runs as on a first open. */
-export async function startOver($: EngineInterface): Promise<void> {
+async function startOver($: EngineInterface): Promise<void> {
   const project = await read($, projectAtom)
   if (project === null) return
   const now = await $.clock.now()
@@ -329,12 +365,14 @@ export async function afterAzCommand($: EngineInterface, e: AzEvent | 'unclear')
     const card = cardFor(cache, e)
     if (card !== undefined) e.ids = [card.id]
     await change($, eventsAtom, l => [...l, e].slice(-100))
-    if (!e.isWrite) return
+    // a read, or a command that failed or was denied, changed nothing in Azure
+    if (!e.isWrite || e.exit !== 0) return
     if (card !== undefined) return await refreshOne($, card.id)
     const rules = await read($, rulesAtom)
     const groupId = cache !== null && e.group !== undefined ? `/subscriptions/${cache.subscription.id}/resourcegroups/${e.group}` : undefined
     if (rules !== null && groupId !== undefined && groupId in rules.groups) return await updateProject($)
-    await proposeWritten($, e, groupId)
+    // something deleted outside the project is nothing to propose
+    if (e.verb !== 'delete') await proposeWritten($, e, groupId)
   } catch {
     // shortcut: the hook's follow-up is best effort; the next Update catches up
   }
@@ -345,23 +383,24 @@ async function proposeWritten($: EngineInterface, e: AzEvent, groupId: string | 
   if (e.name === undefined && groupId === undefined && (e.ids ?? []).length === 0) return
   const find = (): ScanRow | undefined => mem.lastList.find(r => (e.ids ?? []).includes(r.id.toLowerCase()) ||
     (r.name.toLowerCase() === e.name && (e.group === undefined || r.resourceGroup.toLowerCase() === e.group)))
-  // a resource Claude just created is not in a list read before: read it again once
+  // a resource Claude just created is not in a list read before: read it again once (quietly)
   let row = find()
-  if (row === undefined && await readList($)) row = find()
+  if (row === undefined && e.verb === 'create' && await readList($, true)) row = find()
   const id = row?.id.toLowerCase() ?? groupId ?? e.ids?.[0]
   if (id === undefined) return
   const rules = await read($, rulesAtom)
   if (rules !== null && (id in rules.dismissed || id in rules.includes || id in rules.excludes || id in rules.groups)) return
   if (row !== undefined) e.ids = [id]
+  const kind = row === undefined && isGroupId(id) ? 'group' : 'resource'
   await offer($, [row !== undefined
-    ? { id, kind: 'resource', origin: 'hook', reason: 'claude-wrote', name: row.name, type: row.type.toLowerCase() }
-    : { id, kind: 'group', origin: 'hook', reason: 'claude-wrote', name: e.group ?? id }])
+    ? { id, kind, origin: 'hook', reason: 'claude-wrote', name: row.name, type: row.type.toLowerCase() }
+    : { id, kind, origin: 'hook', reason: 'claude-wrote', name: kind === 'group' ? (e.group ?? id) : id.slice(id.lastIndexOf('/') + 1) }])
 }
 
 // ---------------------------------------------------------------- pane keys
 
 /** Runs the action a pressed contract key asks for; a press also restarts a stopped automatic Update. */
-export async function runKey($: EngineInterface, action: PaneAction, arg: string | undefined): Promise<void> {
+async function runKey($: EngineInterface, action: PaneAction, arg: string | undefined): Promise<void> {
   // only a press that asks Azure for something restarts a stopped or waiting automatic Update
   if (action !== 'open' && action !== 'refresh-cost') resume()
   try {
@@ -394,7 +433,8 @@ export async function onPaneKey($: EngineInterface, key: string): Promise<void> 
 async function tick($: EngineInterface): Promise<void> {
   const busy = await read($, busyAtom)
   const project = await read($, projectAtom)
-  if (busy.update || busy.scan || project === null || (await read($, rulesAtom)) === null) return
+  // no rules yet (a failed first Scan) is not a reason to stop: updateProject then scans again
+  if (busy.update || busy.scan || project === null) return
   const now = await $.clock.now()
   const placed = (await $.ui.panes()).some(p => p.id === PANE && p.isPlaced)
   let cache = await read($, cacheAtom)
@@ -408,13 +448,16 @@ async function tick($: EngineInterface): Promise<void> {
     : Math.max((cache?.stateAt ?? now) + intervalFor(now, lastInputAt), loop.backoffUntil)
   await setHealth($, { nextAutoAt })
   if (!shouldRefresh({ now, placed, lastInputAt, stateAt: cache?.stateAt, backoffUntil: loop.backoffUntil, isLoginStopped: loop.isLoginStopped })) return
-  if (cache !== null && !takeLease({ ...cache },await $.session.id(), now)) {
-    return await setHealth($, { isLeaseHolder: false })
+  // the turn between sessions lives in the cache FILE: another session's lease on disk wins; mine is written there before reading Azure
+  if (cache !== null) {
+    const probe: AzCache = { ...cache, lease: disk?.lease ?? cache.lease }
+    if (!takeLease(probe, await $.session.id(), now)) return await setHealth($, { isLeaseHolder: false })
+    await saveCache($, probe)
   }
   await updateProject($)
 }
 
-export async function startLoop($: EngineInterface): Promise<void> {
+async function startLoop($: EngineInterface): Promise<void> {
   loop.cancel?.()
   loop.startedAt = await $.clock.now()
   loop.cancel = $.clock.every(TICK_MS, () => { void tick($).catch(() => undefined) }).cancel
