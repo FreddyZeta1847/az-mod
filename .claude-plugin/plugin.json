@@ -1,0 +1,11 @@
+{
+  "name": "az-mod",
+  "version": "0.1.0",
+  "description": "Keeps the Azure resources of the current project in a side pane: an az hook, a scanner for projects started before the mod, and a live dashboard.",
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "FreddyZeta1847",
+    "url": "https://github.com/FreddyZeta1847"
+  }
+}

@@ -1,0 +1,11 @@
+# Planning and design notes: kept local (they name private Azure resources)
+blueprint/
+design/
+
+# Claude Code local files
+.claude/settings.local.json
+.claude/coordination/
+.claude/worktrees/
+
+# Tooling
+node_modules/
