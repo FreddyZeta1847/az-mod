@@ -43,3 +43,11 @@ test('u4 a resource Azure lists with no status at all is ok, not unknown (static
   expect(rowToCard({ ...quiet, provisioningState: 'Updating' }, NOW, 'group').status).toBe('busy')
   expect(rowToCard({ ...quiet, state: 'Stopped' }, NOW, 'group').status).toBe('stopped')
 })
+
+test('u5 an empty list is no fact; a list of names reads as a list', async () => {
+  const base = DEMO_SUITE_ROWS.find(r => r.name === 'app-control') as GraphRow
+  const site = { ...base, type: 'microsoft.web/staticsites' }
+  expect(rowToCard({ ...site, customDomains: '[]' }, NOW, 'group').facts.customDomains).toBeUndefined()
+  expect(rowToCard({ ...site, customDomains: '["www.example.com","example.com"]' }, NOW, 'group').facts.customDomains)
+    .toBe('www.example.com, example.com')
+})

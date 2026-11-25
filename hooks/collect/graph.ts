@@ -92,7 +92,22 @@ export const nextPage = (answer: unknown): string | undefined => {
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null)
 /** A list or object (as `az resource show` returns it) as one line; a string as it is. */
-const asText = (v: unknown): string | null => (v === null || v === undefined ? null : typeof v === 'string' ? str(v) : JSON.stringify(v))
+const parsedOr = (s: string): unknown => {
+  try {
+    return JSON.parse(s) as unknown
+  } catch {
+    return s
+  }
+}
+/** A list as Resource Graph (`tostring`, text) or az (an array) gives it: empty is no fact, plain values read «a, b». */
+const asText = (v: unknown): string | null => {
+  const x = typeof v === 'string' && /^\s*[[{]/.test(v) ? parsedOr(v) : v
+  if (x === null || x === undefined) return null
+  if (typeof x === 'string') return str(x)
+  if (Array.isArray(x) && x.length === 0) return null
+  if (Array.isArray(x) && x.every(e => typeof e !== 'object')) return x.join(', ')
+  return JSON.stringify(x)
+}
 /** 'Standard_GRS' → 'GRS' (the full read projects it, a single read derives it). */
 const redundancyOf = (r: GraphRow): string | null => str(r.redundancy) ?? (str(r.sku)?.split('_')[1] ?? null)
 const BUSY = /^(creating|updating|deleting|inprogress|accepted|provisioning|scaling|activating)$/i

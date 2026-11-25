@@ -30,7 +30,7 @@ const foundAtom = atom({ plugin: 'az-mod', key: 'found' } as const, [], { shape:
 const uiAtom = atom({ plugin: 'az-mod', key: 'ui' } as const,
   { lastInputAt: 0, openCard: null, closed: [], showAuto: false, showHidden: false, isAdding: false }, { shape: 'ui-1' })
 import { dot, statusDonut, typeIcon } from './svg'
-import { C, FACT_LABELS, STATUS, STATUS_ORDER, TYPE_ORDER, ago, factsOf, keyFact, nameFromId, typeStyle } from './theme'
+import { C, FACT_LABELS, STATUS, STATUS_ORDER, TYPE_ORDER, ago, factsOf, keyFact, nameFromId, resourceCount, typeStyle } from './theme'
 
 const STALE_MS = 10 * 60_000
 
@@ -132,7 +132,7 @@ export async function drawDashboard($: EngineInterface, e: RenderInput<'Pane'>) 
     const name = cache?.groups[autoAdded.groupId]?.name ?? nameFromId(autoAdded.groupId)
     banners.push(
       <Box key="b-auto" flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
-        <Text color={C.muted}>Uso {name} ({autoAdded.count} risorse)</Text>
+        <Text color={C.muted}>Uso {name} ({resourceCount(autoAdded.count)})</Text>
         <Button key={keyFor('undo-auto')} label="Annulla" plain onPress={act.press} />
       </Box>,
     )
@@ -168,7 +168,7 @@ export async function drawDashboard($: EngineInterface, e: RenderInput<'Pane'>) 
             <Text color={C.faint}>{counts[s]}</Text>
           </Box>
         ))}
-        <Text color={C.faint}>{visible.length} risorse · {updated}</Text>
+        <Text color={C.faint}>{resourceCount(visible.length)} · {updated}</Text>
       </Box>
     </Box>
   )

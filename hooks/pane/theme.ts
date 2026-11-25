@@ -78,6 +78,9 @@ export const keyFact = (card: AzCard): string => {
 }
 
 /** «40 s fa», «12 min fa», «3 h fa», «2 giorni fa». */
+/** «1 risorsa», «3 risorse». */
+export const resourceCount = (n: number): string => (n === 1 ? '1 risorsa' : `${n} risorse`)
+
 export const ago = (now: Ms, at: Ms): string => {
   const s = Math.max(0, Math.round((now - at) / 1000))
   if (s < 60) return `${s} s fa`

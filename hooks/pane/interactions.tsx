@@ -15,7 +15,7 @@ import type { Elements, EngineInterface, UiPressArgument } from 'claude-code'
 import type { AzId, AzSuggestion, AzUi } from '../../types'
 
 import { keyFor, SEARCH_INPUT } from '../contract'
-import { C } from './theme'
+import { C, resourceCount } from './theme'
 
 type Flag = 'showAuto' | 'showHidden' | 'isAdding'
 
@@ -50,7 +50,7 @@ export const picker = ({ Box, Text, Button, Input }: Els, act: Handlers, found: 
     {found.map(s => (
       <Box key={`found-${s.id}`} flexDirection="row" gap={1} alignItems="center">
         <Button key={s.kind === 'group' ? keyFor('add-group', s.id) : keyFor('add', s.id)} label={`+ ${s.name}`} plain onPress={act.add} />
-        <Text color={C.faint}>{s.kind === 'group' ? `gruppo${s.count === undefined ? '' : ` · ${s.count} risorse`}` : (s.type ?? '')}</Text>
+        <Text color={C.faint}>{s.kind === 'group' ? `gruppo${s.count === undefined ? '' : ` · ${resourceCount(s.count)}`}` : (s.type ?? '')}</Text>
       </Box>
     ))}
     <Button key="close-picker" label="Chiudi" plain onPress={act.toggle('isAdding')} />

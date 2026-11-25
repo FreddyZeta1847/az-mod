@@ -31,6 +31,7 @@
 │   ├── pane/
 │   │   ├── dashboard.test.tsx
 │   │   ├── dashboard.tsx
+│   │   ├── firstuse.test.tsx
 │   │   ├── index.tsx
 │   │   ├── interactions.test.tsx
 │   │   ├── interactions.tsx
