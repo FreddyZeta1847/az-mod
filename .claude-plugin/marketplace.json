@@ -1,0 +1,5 @@
+{
+  "name": "az-mod",
+  "owner": { "name": "FreddyZeta1847" },
+  "plugins": [{ "name": "az-mod", "source": "./" }]
+}
