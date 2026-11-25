@@ -3,13 +3,11 @@
  * and Pannello (pane/): state atoms, constants (fact keys per type, Azure auto-created
  * types, write verbs), the AzActions interface the pane calls, and small pure helpers.
  * Owned by the main session; the two parts import it and never edit it.
+ * (Revised 25/11: the AzActions interface became the button-key contract below.)
  */
 import { atom } from 'claude-code'
-import type { EngineInterface } from 'claude-code'
 
-import type {
-  AzActivity, AzCard, AzEvent, AzFactKey, AzGroupId, AzId, AzRules, AzSuggestion,
-} from '../types'
+import type { AzActivity, AzCard, AzEvent, AzFactKey, AzGroupId, AzId, AzRules } from '../types'
 
 export const PLUGIN = 'az-mod'
 export const PANE = 'az-mod'
@@ -26,6 +24,7 @@ export const busyAtom = atom({ plugin: 'az-mod', key: 'busy' } as const,
   { scan: false, update: false, cost: false, ids: [] }, { shape: 'busy-1' })
 export const healthAtom = atom({ plugin: 'az-mod', key: 'health' } as const,
   { az: 'ok', isLeaseHolder: false, nextAutoAt: null, rulesMode: 'ok' }, { shape: 'health-1' })
+export const foundAtom = atom({ plugin: 'az-mod', key: 'found' } as const, [], { shape: 'found-1' })
 export const uiAtom = atom({ plugin: 'az-mod', key: 'ui' } as const,
   { isVisible: false, lastInputAt: 0, openCard: null, showAuto: false, showHidden: false, isAdding: false }, { shape: 'ui-1' })
 
@@ -57,22 +56,29 @@ export const WRITE_VERBS: string[] = [
   'create', 'update', 'set', 'delete', 'deploy', 'up', 'start', 'stop', 'restart', 'assign', 'add', 'remove', 'import',
 ]
 
-/** What the pane may ask of Raccolta. Never rejects: the outcome lands in state. */
-export interface AzActions {
-  scan($: EngineInterface): Promise<void>
-  update($: EngineInterface): Promise<void>
-  refreshOne($: EngineInterface, id: AzId): Promise<void>
-  refreshCost($: EngineInterface): Promise<void>
-  openCard($: EngineInterface, id: AzId): Promise<void>
-  include($: EngineInterface, id: AzId): Promise<void>
-  exclude($: EngineInterface, id: AzId): Promise<void>
-  restore($: EngineInterface, id: AzId): Promise<void>
-  addGroup($: EngineInterface, groupId: AzGroupId): Promise<void>
-  removeGroup($: EngineInterface, groupId: AzGroupId): Promise<void>
-  accept($: EngineInterface, suggestionId: string): Promise<void>
-  dismiss($: EngineInterface, suggestionId: string): Promise<void>
-  resetRules($: EngineInterface): Promise<void>
-  search($: EngineInterface, text: string): Promise<AzSuggestion[]>
+/*
+ * How the pane talks to Raccolta: the button keys ARE the contract. The engine refuses to
+ * pass $ to a method it cannot follow (e.g. actions.update($)), so the pane never calls
+ * Raccolta. The pane draws Buttons with these keys (their onPress only updates the `ui`
+ * atom); Raccolta hooks `ui.press` / `ui.input` on its own pane and acts on `parseKey`.
+ * Search: the pane draws an Input keyed SEARCH_INPUT; Raccolta answers in `foundAtom`.
+ */
+export type PaneAction =
+  | 'update' | 'scan' | 'refresh-cost' | 'reset-rules' | 'undo-auto'
+  | 'open' | 'refresh' | 'add' | 'exclude' | 'restore' | 'accept' | 'dismiss' | 'add-group' | 'remove-group'
+/** Keys with no argument: the key is the action. */
+const PLAIN_ACTIONS: PaneAction[] = ['update', 'scan', 'refresh-cost', 'reset-rules', 'undo-auto']
+/** Keys `<action>-<arg>`: open takes a resource name, refresh/add/exclude/restore an AzId, accept/dismiss a suggestion id, add-group/remove-group an AzGroupId. Longest prefix first. */
+const ARG_ACTIONS: PaneAction[] = ['remove-group', 'add-group', 'open', 'refresh', 'add', 'exclude', 'restore', 'accept', 'dismiss']
+export const SEARCH_INPUT = 'add-search'
+
+export const keyFor = (action: PaneAction, arg?: string): string => (arg === undefined ? action : `${action}-${arg}`)
+
+/** The Raccolta action a pressed key asks for; null for the pane's own keys (toggles) or unknown ones. */
+export const parseKey = (key: string): { action: PaneAction; arg?: string } | null => {
+  if (PLAIN_ACTIONS.includes(key as PaneAction)) return { action: key as PaneAction }
+  const action = ARG_ACTIONS.find(a => key.startsWith(`${a}-`) && key.length > a.length + 1)
+  return action ? { action, arg: key.slice(action.length + 1) } : null
 }
 
 /** Lowercase; every run of non [a-z0-9] becomes one '-'; no '-' at the ends. */

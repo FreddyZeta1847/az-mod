@@ -4,7 +4,7 @@
  */
 import { expect, test } from 'claude-code/testing'
 
-import { expectedGroup, groupIdOf, isByClaude, isHidden, normalizeName } from './contract'
+import { expectedGroup, groupIdOf, isByClaude, isHidden, keyFor, normalizeName, parseKey } from './contract'
 import type { AzActivity, AzCard, AzEvent, AzRules } from '../types'
 
 const SUB = '/subscriptions/00000000-0000-0000-0000-000000000000'
@@ -49,4 +49,15 @@ test('isByClaude matches an activity to a recent hook event on the same resource
   expect(isByClaude(activity, [event(140_000, [ID_A])])).toBe(true)
   expect(isByClaude(activity, [event(20_000, [ID_A])])).toBe(false)
   expect(isByClaude(activity, [event(140_000, [ID_B])])).toBe(false)
+})
+
+test('pane button keys round-trip to the action Raccolta performs', async () => {
+  expect(parseKey('update')).toEqual({ action: 'update' })
+  expect(parseKey('scan')).toEqual({ action: 'scan' })
+  expect(parseKey(keyFor('open', 'app-control'))).toEqual({ action: 'open', arg: 'app-control' })
+  expect(keyFor('open', 'app-control')).toBe('open-app-control')
+  expect(parseKey(keyFor('accept', ID_A))).toEqual({ action: 'accept', arg: ID_A })
+  expect(parseKey(keyFor('remove-group', `${SUB}/resourcegroups/rg-x`))).toEqual({ action: 'remove-group', arg: `${SUB}/resourcegroups/rg-x` })
+  expect(parseKey('show-auto')).toBe(null)
+  expect(parseKey('something-else')).toBe(null)
 })
