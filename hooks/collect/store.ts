@@ -154,6 +154,14 @@ export async function loadRules($: EngineInterface, p: AzProject):
   return { ...second, key: r.key, project: r.project }
 }
 
+/**
+ * The rules file right now (another session may have saved since boot), with its mode. Only the
+ * main file: mid-session, a half-written one must not bring back the older backup ('broken' then).
+ */
+export async function readSavedRules($: EngineInterface, key: string): Promise<{ rules: AzRules | null; mode: RulesMode }> {
+  return chooseRules(await readText($, rulesPath(await dataDir($), key)), undefined)
+}
+
 /** Writes the rules with a backup of the previous text first; refused in read-only and broken mode. */
 export async function saveRules($: EngineInterface, key: string, rules: AzRules, mode: RulesMode): Promise<boolean> {
   if (mode !== 'ok') return false

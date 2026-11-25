@@ -17,7 +17,7 @@ import { cacheForSubscription, loop, noteError, noteSuccess, resume, shouldRefre
 import { addGroupTo, dismissIn, excludeIn, includeIn, isGroupId, rankSearch, removeGroupFrom, restoreIn } from './rules-ops'
 import { projectFiles, scanCandidates } from './scan'
 import type { ScanRow } from './scan'
-import { emptyRules, loadCache, loadRules, resetRules as writeReset, saveCache, saveRules, takeLease } from './store'
+import { emptyRules, loadCache, loadRules, readSavedRules, resetRules as writeReset, saveCache, saveRules, takeLease } from './store'
 import { groupIdOf, PANE, parseKey } from '../contract'
 import type { PaneAction } from '../contract'
 import type { AzBusy, AzCache, AzCard, AzEvent, AzHealth, AzId, AzRules, AzSuggestion } from '../../types'
@@ -41,7 +41,8 @@ const uiAtom = atom({ plugin: 'az-mod', key: 'ui' } as const,
  * This module load's memory: the last `az resource list` read (search and hook proposals rank
  * it), the read in flight (one at a time), and whether an Update was asked during a running one.
  */
-const mem = { lastList: [] as ScanRow[], listing: undefined as Promise<boolean> | undefined, again: false }
+type Failed = Extract<AzRun, { ok: false }>
+const mem = { lastList: [] as ScanRow[], listing: undefined as Promise<Failed | null> | undefined, again: false }
 
 const LIST_QUERY = '[].{id:id,name:name,type:type,resourceGroup:resourceGroup}'
 const ENRICH_QUERY = "resources | where type in~ ('microsoft.web/staticsites', 'microsoft.app/containerapps') "
@@ -75,16 +76,34 @@ async function setRules($: EngineInterface, rules: AzRules): Promise<boolean> {
   return true
 }
 
+/**
+ * The rules as saved now: the file first, since another session on the same project may have
+ * changed it since boot (its rules and its mode are published here too), else the ones in state.
+ */
+async function savedRules($: EngineInterface): Promise<AzRules | null> {
+  const project = await read($, projectAtom)
+  if (project === null) return null
+  const mine = await read($, rulesAtom)
+  const disk = await readSavedRules($, project.key)
+  // no file, or one half-written right now: keep what is in state
+  if (disk.rules === null) return mine
+  if ((await read($, healthAtom)).rulesMode !== disk.mode) await setHealth($, { rulesMode: disk.mode })
+  const rules = disk.rules
+  if (JSON.stringify(rules) !== JSON.stringify(mine)) await change($, rulesAtom, () => rules)
+  return rules
+}
+
 /** The rules to change: the saved ones, or empty ones when the project has none yet. */
 async function currentRules($: EngineInterface): Promise<AzRules | null> {
   const project = await read($, projectAtom)
   if (project === null) return null
-  return (await read($, rulesAtom)) ?? emptyRules(project, await $.clock.now())
+  return (await savedRules($)) ?? emptyRules(project, await $.clock.now())
 }
 
-async function noteFailure($: EngineInterface, run: Extract<AzRun, { ok: false }>): Promise<void> {
+async function noteFailure($: EngineInterface, run: Failed): Promise<void> {
   const az = run.missing === true ? 'missing' : run.error.code === 'login' ? 'login' : undefined
-  if (az !== undefined) await setHealth($, { az })
+  // the error also goes in health: with no photo yet, the pane has nowhere else to show it
+  await setHealth($, az === undefined ? { error: run.error } : { az, error: run.error })
   noteError(run.error, await $.clock.now())
   const cache = await read($, cacheAtom)
   if (cache !== null) await change($, cacheAtom, () => ({ ...cache, errors: { ...cache.errors, state: run.error } }))
@@ -105,21 +124,23 @@ async function offer($: EngineInterface, list: AzSuggestion[], replaceOrigins: A
 
 // ---------------------------------------------------------------- reads
 
-/** Reads the subscription's resource list, one read at a time (keystrokes in the search share it). `quiet`: a failure starts no backoff. */
+/**
+ * Reads the subscription's resource list, one read at a time (keystrokes in the search share it).
+ * `quiet`: a failure is not noted (no backoff, no banner); each caller decides for itself.
+ */
 async function readList($: EngineInterface, quiet = false): Promise<boolean> {
-  mem.listing ??= listOnce($, quiet).finally(() => { mem.listing = undefined })
-  return mem.listing
+  mem.listing ??= listOnce($).finally(() => { mem.listing = undefined })
+  const failed = await mem.listing
+  if (failed !== null && !quiet) await noteFailure($, failed)
+  return failed === null
 }
 
-async function listOnce($: EngineInterface, quiet: boolean): Promise<boolean> {
+async function listOnce($: EngineInterface): Promise<Failed | null> {
   const r = await runAz($, ['resource', 'list', '--query', LIST_QUERY], 120_000)
-  if (!r.ok) {
-    if (!quiet) await noteFailure($, r)
-    return false
-  }
+  if (!r.ok) return r
   const rows = (Array.isArray(r.json) ? r.json : []) as ScanRow[]
   mem.lastList = rows.filter(x => typeof x?.id === 'string' && typeof x.name === 'string')
-  return true
+  return null
 }
 
 /** Adds the static sites' repository and the container images (one Resource Graph page; failure only loses those hints). */
@@ -194,7 +215,7 @@ async function readAndPublish($: EngineInterface, key: string): Promise<void> {
   }
   const isLeaseHolder = takeLease(next, await $.session.id(), now)
   await setCache($, next)
-  await setHealth($, { az: 'ok', isLeaseHolder })
+  await setHealth($, { az: 'ok', isLeaseHolder, error: undefined })
   noteSuccess()
   await offer($, relatedOf(next, rules), ['related'])
 }
@@ -206,14 +227,16 @@ async function scanProject($: EngineInterface, isFirst = false): Promise<void> {
   if (project === null || (await read($, busyAtom)).scan) return
   await setBusy($, { scan: true })
   try {
+    // no rules in state: the first adoption is still owed (a reset, or a first Scan that failed)
+    const owed = isFirst || (await read($, rulesAtom)) === null
     if (!(await readList($))) return
     const sub = await currentSubscription($)
     if (sub.ok) await enrichList($, sub.sub.id)
-    const saved = await read($, rulesAtom)
+    const saved = await savedRules($)
     const found = scanCandidates(project, project.key, mem.lastList, await projectFiles($, project.mainRoot), saved)
     await setHealth($, { az: 'ok' })
     const sure: AzSuggestion[] = []
-    if (isFirst || saved === null) {
+    if (owed || saved === null) {
       await adoptFirst($, found.sure)
     } else if (found.sure !== null && !(found.sure in saved.groups) && !(found.sure in saved.dismissed)) {
       const name = mem.lastList.find(r => groupIdOf(r.id) === found.sure)?.resourceGroup ?? found.sure
@@ -229,13 +252,15 @@ async function scanProject($: EngineInterface, isFirst = false): Promise<void> {
   }
 }
 
-/** First open: the sure group enters with «Uso rg-x (N) · Annulla»; the rules file is written either way. */
+/**
+ * First open: the sure group enters with «Uso rg-x (N) · Annulla»; the rules file is written either
+ * way. Built on the rules as saved now: a resource added while the Scan waited for Azure stays.
+ */
 async function adoptFirst($: EngineInterface, sure: string | null): Promise<void> {
-  const project = await read($, projectAtom)
-  if (project === null) return
-  const now = await $.clock.now()
-  const rules = sure === null ? emptyRules(project, now) : addGroupTo(emptyRules(project, now), sure, now)
-  if (!(await setRules($, rules)) || sure === null) return
+  const rules = await currentRules($)
+  if (rules === null) return
+  const adopt = sure !== null && !(sure in rules.groups) && !(sure in rules.dismissed)
+  if (!(await setRules($, adopt ? addGroupTo(rules, sure, await $.clock.now()) : rules)) || !adopt) return
   await change($, autoAddedAtom, () => ({ groupId: sure, count: mem.lastList.filter(r => groupIdOf(r.id) === sure).length }))
 }
 
@@ -335,7 +360,8 @@ async function startOver($: EngineInterface): Promise<void> {
 /** «+ Aggiungi»: ranks the last resource list read (reads one when there is none) and publishes it in `found`. */
 export async function search($: EngineInterface, text: string): Promise<void> {
   try {
-    if (mem.lastList.length === 0 && !(await readList($))) return
+    // quiet: a failed read while typing must not delay the automatic Update
+    if (mem.lastList.length === 0 && !(await readList($, true))) return
     const project = await read($, projectAtom)
     const touched = (await read($, eventsAtom)).map(e => e.name).filter((n): n is string => n !== undefined)
     const found = rankSearch(mem.lastList, text, { key: project?.key ?? '', touched, rules: await read($, rulesAtom) })
@@ -435,6 +461,9 @@ async function tick($: EngineInterface): Promise<void> {
   const project = await read($, projectAtom)
   // no rules yet (a failed first Scan) is not a reason to stop: updateProject then scans again
   if (busy.update || busy.scan || project === null) return
+  // a rules change saved by another session shows here and enters the next read; not while the
+  // first adoption is owed (no rules in state, mode ok), or the empty file would cancel it
+  if ((await read($, rulesAtom)) !== null || (await read($, healthAtom)).rulesMode !== 'ok') await savedRules($)
   const now = await $.clock.now()
   const placed = (await $.ui.panes()).some(p => p.id === PANE && p.isPlaced)
   let cache = await read($, cacheAtom)

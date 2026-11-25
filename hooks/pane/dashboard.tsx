@@ -124,6 +124,10 @@ export async function drawDashboard($: EngineInterface, e: RenderInput<'Pane'>) 
   if (stateAt !== undefined && (now - stateAt > STALE_MS || cache?.errors.state)) {
     banners.push(banner('b-stale', STATUS.busy.color, `Dati non aggiornati da ${Math.floor((now - stateAt) / 60_000)} min${cache?.errors.state ? ` · ${cache.errors.state.message}` : ''}`))
   }
+  // no photo yet and the first read failed: say so, instead of an empty project
+  if (cache === null && health.error && health.az === 'ok') {
+    banners.push(banner('b-noread', STATUS.failed.color, `Non riesco a leggere Azure: ${health.error.message}. Premi Update per riprovare.`))
+  }
   if (autoAdded) {
     const name = cache?.groups[autoAdded.groupId]?.name ?? nameFromId(autoAdded.groupId)
     banners.push(
@@ -214,7 +218,8 @@ export async function drawDashboard($: EngineInterface, e: RenderInput<'Pane'>) 
   ))
 
   // ---- empty project
-  const empty = all.length > 0 || !rules ? null : (
+  // «Nessun gruppo» only after Azure answered: without a photo nothing is known yet
+  const empty = all.length > 0 || !rules || cache === null ? null : (
     <Box key="empty" flexDirection="column" gap={1} padding={1}>
       <Text color={C.muted}>Nessun gruppo rg-{key} in {cache?.subscription.name ?? 'questa sottoscrizione'}.</Text>
       <Text color={C.faint}>Premi «+ Aggiungi» per scegliere un gruppo o una risorsa, oppure Scan per cercare indizi.</Text>
@@ -222,7 +227,8 @@ export async function drawDashboard($: EngineInterface, e: RenderInput<'Pane'>) 
   )
 
   // ---- footer: groups, hidden, Azure-created
-  const groupsLine = groupNames.length < 2 ? null : (
+  // one group too: a group adopted by mistake must be removable
+  const groupsLine = groupNames.length === 0 ? null : (
     <Box key="groups" flexDirection="row" gap={1} flexWrap="wrap" alignItems="center">
       <Text color={C.faint}>Gruppi:</Text>
       {Object.keys(rules?.groups ?? {}).map((g, i) => (

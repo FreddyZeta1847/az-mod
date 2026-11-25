@@ -106,6 +106,8 @@ export type AzHealth = {
   isLeaseHolder: boolean
   nextAutoAt: Ms | null
   rulesMode: 'ok' | 'read-only' | 'broken'
+  /** The last failed read of Azure, cleared by a good one: shown when there is no photo yet. */
+  error?: AzError
 }
 /** `closed`: rows the user closed this session (a failed row is open unless listed here). */
 export type AzUi = { lastInputAt: Ms; openCard: AzId | null; closed: AzId[]; showAuto: boolean; showHidden: boolean; isAdding: boolean }

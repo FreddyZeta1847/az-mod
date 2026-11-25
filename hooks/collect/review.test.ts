@@ -1,7 +1,7 @@
 /*
  * review.test.ts — regression tests for the findings of review round 1 (blueprint
  * reviews, «Raccolta e pannello»): one test per finding that can be reproduced, named
- * after its id (f1…f19). Pure helpers are tested directly; the actions through the whole
+ * after its id (f… round 1, g… round 2, h… round 3). Pure helpers are tested directly; the actions through the whole
  * mod over world.ts (and the real pane where a press is needed).
  */
 import { expect, test } from 'claude-code/testing'
@@ -12,7 +12,8 @@ import { projectFrom, stripUserinfo } from './project'
 import { rankSearch } from './rules-ops'
 import { cleanValue } from './secrets'
 import { dataDirFrom, planSave, resolveKey } from './store'
-import { NOW, result, startWorld } from './world'
+import { NOW, result, ROOT, startWorld } from './world'
+import { SEARCH_INPUT } from '../contract'
 import { DEMO_SUITE_ROWS, gid, RESOURCE_LIST, rid } from '../fixtures/azure'
 import type { GraphRow } from '../fixtures/azure'
 import type { AzCard, AzProject, AzRules } from '../../types'
@@ -242,5 +243,131 @@ test('g3 g4 an Update asked during another one runs after it, with the latest ru
   const bodies = [...w.files.entries()].filter(([k]) => k.includes('/graph-')).map(([, v]) => v)
   expect(bodies.some(b => b.includes('rg-demo-suite-old'))).toBe(true)
   expect(w.runs.filter(a => a[1] === 'rest').length).toBeGreaterThan(1)
+  await ui.unmount()
+})
+
+// ---------------------------------------------------------------- review round 3
+
+const RULES_FILE = '/data/projects/demo-suite.rules.json'
+const savedFile = (w: { files: Map<string, string> }): AzRules => JSON.parse(w.files.get(RULES_FILE) as string) as AzRules
+const STORAGE = rid('rg-other', 'microsoft.storage/storageaccounts', 'stother')
+
+test('h1 a rules change saved by another session is kept', async ($, on) => {
+  const w = startWorld(on)
+  await w.start($)
+  const theirs = savedFile(w)
+  w.files.set(RULES_FILE, JSON.stringify({ ...theirs, includes: { ...theirs.includes, [STORAGE]: { at: NOW } }, updatedAt: NOW + 1 }))
+  const old = gid('rg-demo-suite-old')
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: `dismiss-${old}` })
+  await w.waitFor(() => old in (w.seen.rules?.dismissed ?? {}))
+  expect([STORAGE in savedFile(w).includes, old in savedFile(w).dismissed]).toEqual([true, true])
+  await ui.unmount()
+})
+
+test('h2 the first Scan keeps a resource added while it waited for Azure', async ($, on) => {
+  const w = startWorld(on, {
+    az: argv => {
+      if (argv[1] === 'resource' && argv[2] === 'list' && !w.files.has(RULES_FILE)) {
+        w.files.set(RULES_FILE, JSON.stringify({ ...rulesOf(project({ key: 'demo-suite', mainRoot: ROOT })), includes: { [STORAGE]: { at: NOW } } }))
+      }
+      return undefined
+    },
+  })
+  await w.start($)
+  expect([STORAGE in savedFile(w).includes, gid('rg-demo-suite') in savedFile(w).groups]).toEqual([true, true])
+})
+
+test('h3 a single group can be removed', async ($, on) => {
+  const w = startWorld(on)
+  await w.start($)
+  expect(Object.keys(w.seen.rules?.groups ?? {})).toEqual([gid('rg-demo-suite')])
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: `remove-group-${gid('rg-demo-suite')}` })
+  await w.waitFor(() => Object.keys(w.seen.rules?.groups ?? {}).length === 0)
+  await ui.unmount()
+})
+
+test('h4 a failed first read says so instead of «Nessun gruppo»', async ($, on) => {
+  const w = startWorld(on, { az: argv => (argv[1] === 'rest' ? result(1, '', 'getaddrinfo ENOTFOUND management.azure.com') : undefined) })
+  await $.session.start({ cwd: ROOT, surface: 'desktop', isInteractive: true })
+  await w.waitFor(() => w.seen.health?.error?.code === 'network' && w.idle())
+  const ui = await $.ui.mount(PANE)
+  expect(await ui.findAll({ type: 'Text', text: /Non riesco a leggere Azure: getaddrinfo ENOTFOUND/ })).toHaveLength(1)
+  expect(await ui.findAll({ type: 'Text', text: /Nessun gruppo/ })).toHaveLength(0)
+  await ui.unmount()
+})
+
+test('h5 an environment setting before az is still an az command', async () => {
+  const e = parseAz(`MSYS_NO_PATHCONV=1 az resource show --ids ${STORAGE}`, NOW, 's1')
+  expect(e !== null && e !== 'unclear' ? [e.verb, e.ids] : e).toEqual(['show', [STORAGE]])
+  expect(parseAz('A=1 B=2 az vm list', NOW, 's1')).not.toBe(null)
+  expect(parseAz('echo A=1 az vm list', NOW, 's1')).toBe(null)
+})
+
+test('h6 deleting a project group starts an Update', async ($, on) => {
+  const e = parseAz('az group delete -n RG-Demo-Suite --yes', NOW, 's1')
+  expect(e !== null && e !== 'unclear' ? [e.group, e.name] : e).toEqual(['rg-demo-suite', undefined])
+  const w = startWorld(on)
+  await w.start($)
+  w.runs.length = 0
+  await $.tool.call({ tool: 'Bash', command: 'az group delete -n rg-demo-suite --yes' })
+  await w.waitFor(() => w.runs.some(a => a[1] === 'rest') && w.idle())
+})
+
+test('h7 a failed list read while typing in the search is not noted', async ($, on) => {
+  let n = 0
+  const w = startWorld(on, { az: argv => (argv[1] === 'resource' && argv[2] === 'list' ? result(1, '', `getaddrinfo ENOTFOUND host-${++n}`) : undefined) })
+  await $.session.start({ cwd: ROOT, surface: 'desktop', isInteractive: true })
+  await w.waitFor(() => (w.seen.health?.error?.message ?? '').includes('host-1') && w.idle())
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'toggle-add' })
+  await ui.input({ key: SEARCH_INPUT, text: 'app' })
+  await w.waitFor(() => n >= 2)
+  await w.pause(100)
+  expect(w.seen.health?.error?.message).toContain('host-1')
+  await ui.unmount()
+})
+
+// ---------------------------------------------------------------- review round 3, check of the fixes
+
+const BROKEN = { [RULES_FILE]: '{x', '/data/projects/demo-suite.rules.bak.json': '[1' }
+
+test('h8 after «Riparti da zero» and a failed read, the next Update still adopts the group', async ($, on) => {
+  let fail = true
+  const w = startWorld(on, {
+    files: BROKEN,
+    az: argv => (fail && argv[1] === 'resource' && argv[2] === 'list' ? result(1, '', 'getaddrinfo ENOTFOUND host') : undefined),
+  })
+  await $.session.start({ cwd: ROOT, surface: 'desktop', isInteractive: true })
+  await w.waitFor(() => w.seen.health?.rulesMode === 'broken')
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'reset-rules' })
+  await w.waitFor(() => w.seen.health?.error !== undefined && w.idle())
+  await w.clock.advance(30_000)
+  await w.pause(100)
+  await w.waitFor(() => w.idle())
+  fail = false
+  await ui.press({ key: 'update' })
+  await w.waitFor(() => gid('rg-demo-suite') in (w.seen.rules?.groups ?? {}))
+  await ui.unmount()
+})
+
+test('h9 the mode of the rules saved by another session is followed', async ($, on) => {
+  const w = startWorld(on, { files: BROKEN })
+  await $.session.start({ cwd: ROOT, surface: 'desktop', isInteractive: true })
+  await w.waitFor(() => w.seen.health?.rulesMode === 'broken')
+  const good = { ...rulesOf(project({ key: 'demo-suite', mainRoot: ROOT })), groups: { [gid('rg-demo-suite')]: { at: NOW } } }
+  w.files.set(RULES_FILE, JSON.stringify(good))
+  await w.clock.advance(30_000)
+  await w.waitFor(() => w.seen.health?.rulesMode === 'ok' && gid('rg-demo-suite') in (w.seen.rules?.groups ?? {}))
+  // a newer version of the mod saved its file: this session stops writing it
+  w.files.set(RULES_FILE, JSON.stringify({ ...good, schemaVersion: 2 }))
+  await w.clock.advance(30_000)
+  await w.waitFor(() => w.seen.health?.rulesMode === 'read-only' && w.idle())
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: `remove-group-${gid('rg-demo-suite')}` })
+  await w.pause(100)
+  expect((JSON.parse(w.files.get(RULES_FILE) as string) as AzRules).schemaVersion).toBe(2)
   await ui.unmount()
 })

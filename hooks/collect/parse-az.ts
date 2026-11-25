@@ -16,6 +16,8 @@ const WORD = /^[a-z][a-z0-9-]{0,29}$/
 const MAX_WORDS = 6
 /** az starts a command: first, or right after a chain or a subshell. */
 const STARTS = /^(?:;|&&|\|\||\||\(|&)$/
+/** `NAME=value` before a command (MSYS_NO_PATHCONV=1 az …): an environment setting, not a word. */
+const ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=\S*$/
 const UNCLEAR = /[;|&\n\r`$]/
 
 const unquote = (t: string): string => t.replace(/^["']|["']$/g, '')
@@ -44,9 +46,16 @@ const idsAfter = (args: string[]): string[] => {
   return out.filter(id => CLEAN_ID.test(id))
 }
 
+/** az at i starts a command: nothing before it but environment settings, back to the start or a chain. */
+const startsCommand = (tokens: string[], i: number): boolean => {
+  let j = i - 1
+  while (j >= 0 && ASSIGN.test(tokens[j] as string)) j--
+  return j < 0 || STARTS.test(tokens[j] as string)
+}
+
 export const parseAz = (command: string, now: number, sessionId: string): AzEvent | 'unclear' | null => {
   const tokens = tokenize(command)
-  const azAt = tokens.findIndex((t, i) => t === 'az' && (i === 0 || STARTS.test(tokens[i - 1] as string)))
+  const azAt = tokens.findIndex((t, i) => t === 'az' && startsCommand(tokens, i))
   if (azAt < 0) return null
   if (UNCLEAR.test(command)) return 'unclear'
   const args = splitEquals(tokens.slice(azAt + 1))
@@ -64,5 +73,10 @@ export const parseAz = (command: string, now: number, sessionId: string): AzEven
   if (name !== undefined && CLEAN.test(name.toLowerCase())) event.name = name.toLowerCase()
   if (group !== undefined && CLEAN.test(group.toLowerCase())) event.group = group.toLowerCase()
   if (ids.length > 0) event.ids = ids
+  // az group create/delete -n rg-x: the name is a resource group's
+  if (event.cmdGroup === 'group' && event.name !== undefined) {
+    event.group = event.name
+    delete event.name
+  }
   return event
 }
