@@ -13,8 +13,8 @@ export const ACTIVITY_OPEN_MS = 2 * 60_000
 export const ACTIVITY_MAX = 30
 const WEEK_MS = 7 * 24 * 3_600_000
 
-/** The activity loop's own memory: a refusal never delays the state Update. */
-export const activityLoop = { backoffUntil: 0 }
+/** The activity loop's own memory: one read at a time, and a refusal never delays the state Update. */
+export const activityLoop = { backoffUntil: 0, isReading: false }
 
 export const ACTIVITY_QUERY = '[].{op:operationName.value,status:status.value,at:eventTimestamp,id:resourceId,cid:correlationId}'
 

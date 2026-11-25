@@ -6,8 +6,10 @@
 import { expect, test } from 'claude-code/testing'
 
 import { ACTIVITY_MAX, ACTIVITY_QUERY, activityArgs, activityDue, parseActivity } from './activity'
-import { NOW } from './world'
-import { SECRET_VALUE } from '../fixtures/azure'
+import { NOW, result, ROOT, startWorld } from './world'
+import type { World } from './world'
+import { DEMO_SUITE_ROWS, gid, rid, SECRET_VALUE } from '../fixtures/azure'
+import type { AzRules } from '../../types'
 
 const APP = '/subscriptions/0/resourceGroups/rg-demo-suite/providers/Microsoft.App/containerApps/app-control'
 const iso = (minutesAgo: number): string => new Date(NOW - minutesAgo * 60_000).toISOString()
@@ -87,4 +89,73 @@ test('activity rhythm', async () => {
   expect(activityDue(NOW, NOW - 15 * 60_000, false)).toBe(true)
   expect(activityDue(NOW, NOW - 60_000, true)).toBe(false)
   expect(activityDue(NOW, NOW - 2 * 60_000, true)).toBe(true)
+})
+
+// ---------------------------------------------------------------- B2 through the mod
+
+const PANE = {
+  plugin: 'az-mod', component: 'Pane', requestId: 'az-mod', surface: 'desktop',
+  props: { title: 'Azure', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} },
+} as const
+const isActivity = (a: string[]): boolean => a[1] === 'monitor' && a[2] === 'activity-log'
+const isGraph = (a: string[]): boolean => a[1] === 'rest' && a.some(x => x.includes('Microsoft.ResourceGraph/resources'))
+const activityCalls = (w: World): string[][] => w.runs.filter(isActivity)
+const OTHER = rid('rg-other', 'microsoft.app/containerapps', 'other-api')
+
+/** Saved rules (demo group + one resource from another group): no first Scan, the first read waits a tick. */
+async function startSaved($: Parameters<Parameters<typeof test>[1]>[0], w: World): Promise<void> {
+  await $.session.start({ cwd: ROOT, surface: 'desktop', isInteractive: true })
+  await w.clock.advance(30_000)
+  await w.waitFor(() => Object.keys(w.seen.cache?.resources ?? {}).length > 0 && w.idle())
+}
+const savedRules = (): Record<string, string> => {
+  const rules: AzRules = {
+    schemaVersion: 1, project: { key: 'demo-suite', mainRoot: ROOT, remote: null },
+    groups: { [gid('rg-demo-suite')]: { at: 1 } }, includes: { [OTHER]: { at: 1 } }, excludes: {}, dismissed: {}, updatedAt: 1,
+  }
+  return { '/data/projects/demo-suite.rules.json': JSON.stringify(rules) }
+}
+
+test('activities are read for every group and include', async ($, on) => {
+  const w = startWorld(on, { files: savedRules() })
+  await startSaved($, w)
+  await w.clock.advance(30_000)
+  await w.waitFor(() => w.seen.cache?.activityAt !== undefined)
+  const calls = activityCalls(w)
+  expect(calls.some(a => a.includes('-g') && a.includes('rg-demo-suite'))).toBe(true)
+  expect(calls.some(a => a.includes('--resource-id') && a.includes(OTHER))).toBe(true)
+  expect(calls).toHaveLength(2)
+  const kept = w.seen.cache?.activity ?? []
+  expect(kept.map(a => a.op)).toEqual([
+    'microsoft.app/containerapps/revisions/restart/action', 'microsoft.app/containerapps/write', 'microsoft.storage/storageaccounts/delete',
+  ])
+})
+
+test('opening a card reads them when older than two minutes', async ($, on) => {
+  const w = startWorld(on, { files: savedRules() })
+  await startSaved($, w)
+  await w.clock.advance(30_000)
+  await w.waitFor(() => w.seen.cache?.activityAt !== undefined && w.idle())
+  const before = activityCalls(w).length
+  const ui = await $.ui.mount(PANE)
+  const card = DEMO_SUITE_ROWS.find(r => r.name === 'app-control')?.id as string
+  await ui.press({ key: `open-${card}` })
+  await w.pause(50)
+  expect(activityCalls(w).length).toBe(before)
+  await w.clock.advance(150_000)
+  await ui.press({ key: `open-${card}` })
+  await w.waitFor(() => activityCalls(w).length > before)
+  await ui.unmount()
+})
+
+test('an activity error never stops the state update', async ($, on) => {
+  const w = startWorld(on, { files: savedRules(), az: a => (isActivity(a) ? result(1, '', 'ERROR: getaddrinfo ENOTFOUND management.azure.com') : undefined) })
+  await startSaved($, w)
+  await w.clock.advance(30_000)
+  await w.waitFor(() => w.seen.cache?.errors.activity !== undefined && w.idle())
+  expect(w.seen.cache?.errors.activity?.code).toBe('network')
+  expect(w.seen.health?.az).toBe('ok')
+  w.runs.length = 0
+  await w.clock.advance(120_000)
+  await w.waitFor(() => w.runs.some(isGraph))
 })

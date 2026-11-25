@@ -9,6 +9,7 @@
  *   never reach a card, a file or the state).
  * - RESOURCE_LIST: what `az resource list` answers for the whole subscription.
  * - COST_DEMO_SUITE: the Cost Management answer (this month and last month by resource).
+ * - ACTIVITY_DEMO_SUITE: the activity log of the week, real changes among noise.
  * - azAnswer(argv): a process.run answer for every az call the mod is allowed to make.
  * Owned by the main session; the children read it and never edit it.
  */
@@ -128,6 +129,24 @@ export const COST_DEMO_SUITE = {
   },
 }
 
+/**
+ * `az monitor activity-log list` answer for demo-suite (the test clock is 2025-11-24 16:00 UTC):
+ * three real changes (one in two events, Started then Succeeded) among automatic noise.
+ * After the filter: app-match restarted, app-control written, the storage deleted-and-failed.
+ */
+const ACT = (op: string, status: string, at: string, name: string, cid: string): unknown => ({
+  op, status, at: `2025-11-24T${at}:00Z`, id: (DEMO_SUITE_ROWS.find(r => r.name === name) as GraphRow).id, cid,
+})
+export const ACTIVITY_DEMO_SUITE = [
+  ACT('Microsoft.App/containerApps/revisions/restart/action', 'Succeeded', '15:58', 'app-match', 'a1'),
+  ACT('Microsoft.App/containerApps/getAuthToken/action', 'Succeeded', '15:50', 'app-control', 'n1'),
+  ACT('Microsoft.App/containerApps/write', 'Succeeded', '15:40', 'app-control', 'a2'),
+  ACT('Microsoft.App/containerApps/write', 'Started', '15:39', 'app-control', 'a2'),
+  ACT('Microsoft.Storage/storageAccounts/listKeys/action', 'Succeeded', '15:30', 'stdemosuite', 'n2'),
+  ACT('Microsoft.Storage/storageAccounts/delete', 'Failed', '12:00', 'stdemosuite', 'a3'),
+  ACT('Microsoft.Advisor/recommendations/available/action', 'Active', '09:00', 'kv-demo-suite', 'n3'),
+]
+
 /** Static site of the bottega-web project: its repository matches that project's git remote. */
 export const BOTTEGA_REMOTE = 'https://github.com/example/bottega-web'
 
@@ -145,6 +164,7 @@ export const azAnswer = (argv: readonly string[]): ProcessRunResult => {
   // The query body travels in a file (`--body @<path>`): the test world checks it names the group.
   if (a === 'rest' && argv.some(x => x.includes('Microsoft.ResourceGraph/resources'))) return ok(GRAPH_DEMO_SUITE)
   if (a === 'rest' && argv.some(x => x.includes('Microsoft.CostManagement/query'))) return ok(COST_DEMO_SUITE)
+  if (a === 'monitor' && b === 'activity-log') return ok(ACTIVITY_DEMO_SUITE)
   if (a === 'resource' && b === 'list') return ok(RESOURCE_LIST)
   if (a === 'resource' && b === 'show') {
     const id = argv[argv.indexOf('--ids') + 1]?.toLowerCase()
