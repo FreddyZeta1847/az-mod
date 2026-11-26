@@ -7,8 +7,12 @@
 ├── hooks/
 │   ├── collect/
 │   │   ├── actions.ts
+│   │   ├── activity.test.ts
+│   │   ├── activity.ts
 │   │   ├── az.ts
 │   │   ├── azure.test.ts
+│   │   ├── cost.test.ts
+│   │   ├── cost.ts
 │   │   ├── firstuse.test.ts
 │   │   ├── graph.ts
 │   │   ├── hook.test.ts
@@ -25,12 +29,15 @@
 │   │   ├── scanner.test.ts
 │   │   ├── secrets.ts
 │   │   ├── store.ts
+│   │   ├── warnings.test.ts
 │   │   └── world.ts
 │   ├── fixtures/
 │   │   └── azure.ts
 │   ├── pane/
 │   │   ├── dashboard.test.tsx
 │   │   ├── dashboard.tsx
+│   │   ├── extras.test.tsx
+│   │   ├── extras.tsx
 │   │   ├── firstuse.test.tsx
 │   │   ├── index.tsx
 │   │   ├── interactions.test.tsx
