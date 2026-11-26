@@ -26,7 +26,6 @@ test('cost spike only above one and a half times last month', async () => {
   expect(isCostSpike({ month: 5, prevMonth: 0 })).toBe(false)
   expect(isCostSpike(undefined)).toBe(false)
   expect(warningsFor(card('a', [], { cost: { month: 40, prevMonth: 20 } }))).toEqual(['cost-spike'])
-  expect(warningsFor(card('a', ['cost-spike'], { cost: { month: 40, prevMonth: 20 } }))).toEqual(['cost-spike'])
 })
 
 test('each warning comes from its data', async () => {

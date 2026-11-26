@@ -34,6 +34,36 @@ export const cacheForSubscription = (cache: AzCache | null, sub: { id: string; n
     ? { ...cache, subscription: sub }
     : { schemaVersion: 1, projectKey: key, subscription: sub, groups: {}, resources: {}, activity: [], errors: {} }
 
+/** When a part was last read, or last failed: the newer stamp wins when two photos meet. */
+const costStamp = (c: AzCache): number => Math.max(c.costAt ?? -1, c.errors.cost?.at ?? -1)
+const activityStamp = (c: AzCache): number => Math.max(c.activityAt ?? -1, c.errors.activity?.at ?? -1)
+
+/**
+ * `next` with the costs and the activities of `other` when those were read later (another write
+ * landed meanwhile, or another session saved them). Another subscription or project: `next` as is.
+ * Returns `next` itself when nothing is newer.
+ */
+export const keepNewerReads = (next: AzCache, other: AzCache | null): AzCache => {
+  if (other === null || other.subscription.id !== next.subscription.id || other.projectKey !== next.projectKey) return next
+  let out = next
+  if (costStamp(other) > costStamp(out)) {
+    const { cost: _mine, ...errors } = out.errors
+    const resources = Object.fromEntries(Object.entries(out.resources).map(([id, card]) => {
+      const cost = other.resources[id]?.cost
+      return [id, cost === undefined ? card : { ...card, cost }]
+    }))
+    out = { ...out, resources, errors: other.errors.cost === undefined ? errors : { ...errors, cost: other.errors.cost } }
+    if (other.cost !== undefined) out.cost = other.cost
+    if (other.costAt !== undefined) out.costAt = other.costAt
+  }
+  if (activityStamp(other) > activityStamp(out)) {
+    const { activity: _mine, ...errors } = out.errors
+    out = { ...out, activity: other.activity, errors: other.errors.activity === undefined ? errors : { ...errors, activity: other.errors.activity } }
+    if (other.activityAt !== undefined) out.activityAt = other.activityAt
+  }
+  return out
+}
+
 /** The loop's memory for this module load (a reload starts over, as the timer does). */
 export const loop = { failures: 0, backoffUntil: 0, isLoginStopped: false, startedAt: 0, cancel: undefined as (() => void) | undefined }
 

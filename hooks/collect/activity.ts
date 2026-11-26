@@ -18,19 +18,23 @@ export const activityLoop = { backoffUntil: 0, isReading: false }
 
 export const ACTIVITY_QUERY = '[].{op:operationName.value,status:status.value,at:eventTimestamp,id:resourceId,cid:correlationId}'
 
-export const activityArgs = (target: { group: string } | { id: AzId }): string[] => [
+/** Azure answers 50 events by default, most of them noise (tokens, keys): ask for a whole week of a busy group. */
+export const ACTIVITY_EVENTS = 1000
+
+export const activityArgs = (target: { group: string } | { id: AzId }, subId: string): string[] => [
   'monitor', 'activity-log', 'list',
   ...('group' in target ? ['-g', target.group] : ['--resource-id', target.id]),
-  '--offset', '7d', '--query', ACTIVITY_QUERY,
+  '--subscription', subId, '--offset', '7d', '--max-events', String(ACTIVITY_EVENTS), '--query', ACTIVITY_QUERY,
 ]
 
 const CHANGE = /\/(write|delete)$|\/(start|stop|restart|deploy|activate)\/action$/
 const NOISE = /^microsoft\.(advisor|authorization)\/|\/read$|getauthtoken|listkeys|listsecrets/
-const FINAL = new Set(['succeeded', 'failed'])
+/** How final an outcome is: Container Apps changes end as Accepted (no Succeeded event follows). */
+const RANK: Record<string, number> = { succeeded: 2, failed: 2, accepted: 1 }
 
 type Row = { op?: unknown; status?: unknown; at?: unknown; id?: unknown; cid?: unknown }
 
-/** One row per action (correlation, operation, resource): the final outcome wins over Started/Accepted. */
+/** One row per action (correlation, operation, resource): Succeeded/Failed win over Accepted; Started alone is dropped. */
 export const parseActivity = (rows: unknown, now: number): AzActivity[] => {
   if (!Array.isArray(rows)) return []
   const byAction = new Map<string, AzActivity>()
@@ -39,11 +43,13 @@ export const parseActivity = (rows: unknown, now: number): AzActivity[] => {
     const status = String(r?.status ?? '')
     const at = Date.parse(String(r?.at ?? ''))
     const resourceId = String(r?.id ?? '').toLowerCase()
-    if (!CHANGE.test(op) || NOISE.test(op) || !FINAL.has(status.toLowerCase())) continue
+    const rank = RANK[status.toLowerCase()] ?? 0
+    if (!CHANGE.test(op) || NOISE.test(op) || rank === 0) continue
     if (!Number.isFinite(at) || now - at > WEEK_MS || resourceId === '') continue
     const key = `${String(r?.cid ?? at)}|${op}|${resourceId}`
     const old = byAction.get(key)
-    if (old === undefined || at > old.at) byAction.set(key, { at, op, status, resourceId })
+    const oldRank = old === undefined ? 0 : RANK[old.status.toLowerCase()] ?? 0
+    if (old === undefined || rank > oldRank || (rank === oldRank && at > old.at)) byAction.set(key, { at, op, status, resourceId })
   }
   return [...byAction.values()].sort((a, b) => b.at - a.at).slice(0, ACTIVITY_MAX)
 }

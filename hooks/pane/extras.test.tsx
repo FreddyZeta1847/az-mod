@@ -5,9 +5,9 @@
  */
 import { expect, test } from 'claude-code/testing'
 
-import { startWorld } from '../collect/world'
+import { result, startWorld } from '../collect/world'
 import { WARNING_ORDER } from '../contract'
-import { cache, demoCards, demoState, idOf, NOW, PANE, seed } from './seed'
+import { cache, demoCards, demoState, idOf, NOW, PANE, rules, seed } from './seed'
 import { costBar } from './svg'
 import { activityText, money, WARNING_TEXT } from './theme'
 import type { AzActivity, AzCache, AzCard, AzEvent } from '../../types'
@@ -72,11 +72,13 @@ test('cost box with costs, without, with an error', async ($, on) => {
     current = { ...demoState(), cache: withCosts() }
     let ui = await $.ui.mount({ ...PANE, surface })
     expect(await ui.find({ type: 'Text', text: /^Costo del mese 71,50 €$/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /▲ 49% sul mese scorso \(48,00 €\)/ })).toBeDefined()
+    // k9: month-to-date against a whole month gives no honest percentage: the two amounts, side by side
+    expect(await ui.find({ type: 'Text', text: /^mese scorso 48,00 €$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /%/ })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /^Container Apps$/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /costi aggiornati 1 h fa/ })).toBeDefined()
     expect(await ui.find({ key: 'refresh-cost' })).toBeDefined()
-    if (surface === 'desktop') expect(await ui.find({ type: 'Svg', alt: 'Costo del mese per tipo di risorsa' })).toBeDefined()
+    if (surface === 'desktop') expect((await ui.findAll({ type: 'Svg' })).some(s => s.props.alt === 'Costo del mese per tipo di risorsa')).toBe(true)
     await ui.unmount()
     current = demoState()
     ui = await $.ui.mount({ ...PANE, surface })
@@ -111,10 +113,10 @@ test('Da guardare only with rows, at most four', async ($, on) => {
   await ui.unmount()
   const many = Object.fromEntries(Object.entries(demoCards()).map(([id, c]) => [id, { ...c, status: 'ok' as const, warnings: ['registry-admin' as const] }]))
   current = { ...demoState(), cache: cache({ resources: many }) }
-  ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.findAll({ type: 'Text', text: /utente admin del registry attivo/ })).toHaveLength(4)
-  expect(await ui.find({ type: 'Text', text: /^\+9 altri$/ })).toBeDefined()
-  await ui.unmount()
+  const term = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await term.findAll({ type: 'Text', text: /utente admin del registry attivo/ })).toHaveLength(4)
+  expect(await term.find({ type: 'Text', text: /^\+9 altri$/ })).toBeDefined()
+  await term.unmount()
   const quiet = Object.fromEntries(Object.entries(demoCards()).map(([id, c]) => [id, { ...c, status: 'ok' as const, warnings: [] }]))
   current = { ...demoState(), cache: cache({ resources: quiet }) }
   ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
@@ -123,7 +125,8 @@ test('Da guardare only with rows, at most four', async ($, on) => {
 })
 
 test('recent activity with da Claude', async ($, on) => {
-  const events: AzEvent[] = [{ at: NOW - 11 * 60_000, sessionId: 's1', cmdGroup: 'containerapp', verb: 'restart', isWrite: true, ids: [idOf('app-match')], exit: 0 }]
+  // k4: the hook stamps the event when az returns, after Azure logged the change (10 min ago)
+  const events: AzEvent[] = [{ at: NOW - 9 * 60_000, sessionId: 's1', cmdGroup: 'containerapp', verb: 'restart', isWrite: true, ids: [idOf('app-match')], exit: 0 }]
   let current: Record<string, unknown> = {}
   seed(on, () => current)
   for (const surface of SURFACES) {
@@ -149,6 +152,33 @@ test('each row shows its cost', async ($, on) => {
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await ui.find({ type: 'Text', text: /^40,00 €$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^1,50 €$/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('k5 the month total counts only the resources of the project shown', async ($, on) => {
+  const hidden = idOf('stdemosuite')
+  const cards = costed()
+  cards[hidden] = { ...(cards[hidden] as AzCard), cost: { month: 250, prevMonth: 200 } }
+  // the storage is taken out of the project: Azure still bills it in the group, the box does not count it
+  seed(on, { ...demoState(), rules: rules({ excludes: { [hidden]: { at: NOW } } }), cache: withCosts({ resources: cards, cost: { currency: 'EUR', month: 320, prevMonth: 248 } }) })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /^Costo del mese 70,00 €$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^mese scorso 48,00 €$/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('k11 the cost button waits while Azure is throttling', async ($, on) => {
+  const isCost = (a: string[]): boolean => a[1] === 'rest' && a.some(x => x.includes('Microsoft.CostManagement/query'))
+  const w = startWorld(on, { az: a => (isCost(a) ? result(1, '', 'ERROR: (429) Too many requests. Retry-After: 600') : undefined) })
+  await w.start($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'refresh-cost' })
+  await w.waitFor(() => w.seen.cache?.errors.cost !== undefined && w.idle())
+  const calls = w.runs.filter(isCost).length
+  await ui.press({ key: 'refresh-cost' })
+  await ui.press({ key: 'refresh-cost' })
+  await w.pause(50)
+  expect(w.runs.filter(isCost).length).toBe(calls)
   await ui.unmount()
 })
 

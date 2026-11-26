@@ -7,14 +7,14 @@
 import { expect, test } from 'claude-code/testing'
 
 import { costBody, costDue, parseCost } from './cost'
+import { keepNewerReads } from './refresh'
 import { NOW, result, ROOT, startWorld } from './world'
 import type { World } from './world'
 import { DEMO_SUITE_ROWS, rid, SUB } from '../fixtures/azure'
-import type { AzRules } from '../../types'
+import type { AzCache, AzCard, AzRules } from '../../types'
 
 const R1 = '/subscriptions/0/resourcegroups/rg-demo-suite/providers/microsoft.app/containerapps/app-control'
 const R2 = '/subscriptions/0/resourcegroups/rg-demo-suite/providers/microsoft.storage/storageaccounts/stdemo'
-const THIS_MONTH = new Date(NOW).toISOString().slice(0, 7)
 const firstOf = (offset: number): string => {
   const d = new Date(NOW)
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + offset, 1)).toISOString().slice(0, 19)
@@ -56,7 +56,6 @@ test('answer becomes month and previous month per resource', async () => {
   // the columns are found by name, not by place
   const shuffled = parseCost(answer(rows.map(([c, m, id, cur]) => [id, cur, c, m]), ['ResourceId', 'Currency', 'Cost', 'BillingMonth']), NOW)
   expect(shuffled.byId[R1]).toEqual({ month: 10, prevMonth: 4 })
-  expect(THIS_MONTH.length).toBe(7)
 })
 
 test('no row this month is zero, not missing', async () => {
@@ -156,4 +155,58 @@ test('costs of a resource added from another group are asked by id', async ($, o
   expect(body.includes('"ResourceId"')).toBe(true)
   expect(body.includes(other)).toBe(true)
   expect(body.includes('rg-demo-suite')).toBe(true)
+})
+
+// ---------------------------------------------------------------- review round 1 (k3, k6, k10)
+
+const photo = (over: Partial<AzCache> = {}): AzCache => ({
+  schemaVersion: 1, projectKey: 'demo-suite', subscription: SUB, groups: {}, activity: [], errors: {},
+  resources: { [R1]: { id: R1, name: 'app-control', type: 'microsoft.app/containerapps', group: 'rg-demo-suite', location: 'westeurope',
+    status: 'ok', autoCreated: false, via: 'group', facts: {}, uses: [], warnings: [], stateAt: NOW } },
+  ...over,
+})
+
+test('k3 k6 a photo written later keeps costs and activities read meanwhile', async () => {
+  const update = photo({ stateAt: NOW })
+  const withReads = photo({
+    stateAt: NOW - 120_000, costAt: NOW - 1_000, cost: { currency: 'EUR', month: 9, prevMonth: null },
+    activityAt: NOW - 500, activity: [{ at: NOW - 600_000, op: 'microsoft.app/containerapps/write', status: 'Succeeded', resourceId: R1 }],
+  })
+  withReads.resources[R1] = { ...(withReads.resources[R1] as AzCard), cost: { month: 9, prevMonth: null } }
+  const kept = keepNewerReads(update, withReads)
+  expect(kept.stateAt).toBe(NOW)
+  expect(kept.cost?.month).toBe(9)
+  expect(kept.costAt).toBe(NOW - 1_000)
+  expect(kept.resources[R1]?.cost).toEqual({ month: 9, prevMonth: null })
+  expect(kept.activity).toHaveLength(1)
+  // nothing newer: the same photo comes back
+  expect(keepNewerReads(withReads, update)).toBe(withReads)
+  // a newer failure of the cost read wins too
+  const failed = photo({ errors: { cost: { at: NOW, code: 'throttled', message: 'busy' } } })
+  expect(keepNewerReads(withReads, failed).errors.cost?.code).toBe('throttled')
+  // another subscription or project is never mixed in
+  expect(keepNewerReads(update, { ...withReads, subscription: { id: 'other', name: 'Other' } })).toBe(update)
+  expect(keepNewerReads(update, { ...withReads, projectKey: 'other' })).toBe(update)
+})
+
+test('k10 no row keeps the currency read before', async () => {
+  expect(parseCost(answer([]), NOW, 'USD').currency).toBe('USD')
+  expect(parseCost(answer([[1, firstOf(0), R1, 'CHF']]), NOW, 'USD').currency).toBe('CHF')
+})
+
+test('k10 every page of the cost answer is read', async ($, on) => {
+  const page2 = 'https://management.azure.com/subscriptions/x/providers/Microsoft.CostManagement/query?api-version=2023-11-01&$skiptoken=p2'
+  const w = startWorld(on, {
+    az: a => {
+      if (!isCost(a)) return undefined
+      const url = a[a.indexOf('--url') + 1] ?? ''
+      const rows = url === page2 ? [[5, '2025-11-01T00:00:00', idOf('app-flow'), 'EUR']] : [[30, '2025-11-01T00:00:00', idOf('app-control'), 'EUR']]
+      return result(0, JSON.stringify({ properties: { columns: ['Cost', 'BillingMonth', 'ResourceId', 'Currency'].map(name => ({ name })), rows, nextLink: url === page2 ? null : page2 } }))
+    },
+  })
+  await w.start($)
+  await w.clock.advance(30_000)
+  await w.waitFor(() => w.seen.cache?.costAt !== undefined && w.idle())
+  expect(costCalls(w)).toBe(2)
+  expect(w.seen.cache?.cost?.month).toBe(35)
 })

@@ -4,6 +4,7 @@
  * action, nothing but four fields kept), then the reading through the whole mod over world.ts.
  */
 import { expect, test } from 'claude-code/testing'
+import type { Engine } from 'claude-code/testing'
 
 import { ACTIVITY_MAX, ACTIVITY_QUERY, activityArgs, activityDue, parseActivity } from './activity'
 import { NOW, result, ROOT, startWorld } from './world'
@@ -19,10 +20,10 @@ const ev = (op: string, status: string, minutesAgo: number, cid = `c-${op}-${min
 // ---------------------------------------------------------------- B1 call and filter
 
 test('the call asks only named fields for a week', async () => {
-  expect(activityArgs({ group: 'rg-demo-suite' })).toEqual(
-    ['monitor', 'activity-log', 'list', '-g', 'rg-demo-suite', '--offset', '7d', '--query', ACTIVITY_QUERY])
-  expect(activityArgs({ id: APP })).toEqual(
-    ['monitor', 'activity-log', 'list', '--resource-id', APP, '--offset', '7d', '--query', ACTIVITY_QUERY])
+  // k1: 50 events by default, most of them noise; k12: the subscription the photo belongs to
+  const tail = ['--subscription', 'sub-1', '--offset', '7d', '--max-events', '1000', '--query', ACTIVITY_QUERY]
+  expect(activityArgs({ group: 'rg-demo-suite' }, 'sub-1')).toEqual(['monitor', 'activity-log', 'list', '-g', 'rg-demo-suite', ...tail])
+  expect(activityArgs({ id: APP }, 'sub-1')).toEqual(['monitor', 'activity-log', 'list', '--resource-id', APP, ...tail])
   expect(ACTIVITY_QUERY.includes('properties')).toBe(false)
   expect(ACTIVITY_QUERY.includes('claims')).toBe(false)
 })
@@ -57,6 +58,17 @@ test('started and succeeded become one row', async () => {
   expect(kept).toHaveLength(1)
   expect(kept[0]?.status).toBe('Succeeded')
   expect(kept[0]?.at).toBe(NOW - 10 * 60_000)
+})
+
+test('k2 container app changes end as Accepted and are kept', async () => {
+  const kept = parseActivity([
+    ev('Microsoft.App/containerApps/write', 'Started', 12, 'c1'),
+    ev('Microsoft.App/containerApps/write', 'Accepted', 11, 'c1'),
+    ev('Microsoft.App/containerApps/write', 'Started', 5, 'c2'),
+    ev('Microsoft.Resources/deployments/write', 'Accepted', 9, 'c3'),
+    ev('Microsoft.Resources/deployments/write', 'Succeeded', 8, 'c3'),
+  ], NOW)
+  expect(kept.map(a => `${a.op}:${a.status}`)).toEqual(['microsoft.resources/deployments/write:Succeeded', 'microsoft.app/containerapps/write:Accepted'])
 })
 
 test('noise and duplicates go, at most 30 rows', async () => {
@@ -103,7 +115,7 @@ const activityCalls = (w: World): string[][] => w.runs.filter(isActivity)
 const OTHER = rid('rg-other', 'microsoft.app/containerapps', 'other-api')
 
 /** Saved rules (demo group + one resource from another group): no first Scan, the first read waits a tick. */
-async function startSaved($: Parameters<Parameters<typeof test>[1]>[0], w: World): Promise<void> {
+async function startSaved($: Engine, w: World): Promise<void> {
   await $.session.start({ cwd: ROOT, surface: 'desktop', isInteractive: true })
   await w.clock.advance(30_000)
   await w.waitFor(() => Object.keys(w.seen.cache?.resources ?? {}).length > 0 && w.idle())
@@ -139,12 +151,18 @@ test('opening a card reads them when older than two minutes', async ($, on) => {
   const before = activityCalls(w).length
   const ui = await $.ui.mount(PANE)
   const card = DEMO_SUITE_ROWS.find(r => r.name === 'app-control')?.id as string
-  await ui.press({ key: `open-${card}` })
+  await ui.press({ key: `open-${card}` }) // opens: read less than 2 min ago, nothing
+  await ui.press({ key: `open-${card}` }) // closes
   await w.pause(50)
   expect(activityCalls(w).length).toBe(before)
   await w.clock.advance(150_000)
-  await ui.press({ key: `open-${card}` })
-  await w.waitFor(() => activityCalls(w).length > before)
+  await ui.press({ key: `open-${card}` }) // opens: older than 2 min, read again
+  await w.waitFor(() => activityCalls(w).length > before && w.idle())
+  const opened = activityCalls(w).length
+  await w.clock.advance(150_000)
+  await ui.press({ key: `open-${card}` }) // k8: closing reads nothing
+  await w.pause(50)
+  expect(activityCalls(w).length).toBe(opened)
   await ui.unmount()
 })
 
@@ -158,4 +176,13 @@ test('an activity error never stops the state update', async ($, on) => {
   w.runs.length = 0
   await w.clock.advance(120_000)
   await w.waitFor(() => w.runs.some(isGraph))
+})
+
+test('k7 one target that cannot be read does not hide the others', async ($, on) => {
+  const w = startWorld(on, { files: savedRules(), az: a => (isActivity(a) && a.includes('--resource-id') ? result(1, '', 'ERROR: (AuthorizationFailed) no access') : undefined) })
+  await startSaved($, w)
+  await w.clock.advance(30_000)
+  await w.waitFor(() => w.seen.cache?.activityAt !== undefined && w.idle())
+  expect(w.seen.cache?.activity.length).toBe(3)
+  expect(w.seen.cache?.errors.activity?.code).toBe('forbidden')
 })

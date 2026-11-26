@@ -49,6 +49,9 @@ test('isByClaude matches an activity to a recent hook event on the same resource
   expect(isByClaude(activity, [event(140_000, [ID_A])])).toBe(true)
   expect(isByClaude(activity, [event(20_000, [ID_A])])).toBe(false)
   expect(isByClaude(activity, [event(140_000, [ID_B])])).toBe(false)
+  // k4: the hook stamps the event when az returns, after Azure logged the change
+  expect(isByClaude(activity, [event(230_000, [ID_A])])).toBe(true)
+  expect(isByClaude(activity, [event(400_000, [ID_A])])).toBe(false)
 })
 
 test('pane button keys round-trip to the action Raccolta performs', async () => {

@@ -6,10 +6,11 @@
 import { expect, test } from 'claude-code/testing'
 
 import { cache, DEMO, demoCards, demoState, idOf, PANE, seed } from './seed'
+import type { AzCard } from '../../types'
 
 test('u6 one resource is written in the singular', async ($, on) => {
   const one = idOf('app-control')
-  seed(on, { ...demoState(), cache: cache({ resources: { [one]: demoCards()[one] } }), autoAdded: { groupId: DEMO, count: 1 } })
+  seed(on, { ...demoState(), cache: cache({ resources: { [one]: demoCards()[one] as AzCard } }), autoAdded: { groupId: DEMO, count: 1 } })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await ui.find({ type: 'Text', text: /^1 risorsa · aggiornato/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /\(1 risorsa\)/ })).toBeDefined()

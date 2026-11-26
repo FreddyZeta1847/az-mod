@@ -36,17 +36,19 @@ const costByType = (cards: AzCard[]): { label: string; color: string; value: num
   return [...by.values()].filter(x => x.value > 0).sort((a, b) => b.value - a.value)
 }
 
-/** «▲ 20% sul mese scorso (48,00 €)», or the plain amount when there is nothing to compare. */
-const trendText = (month: number, prev: number | null, currency: string): { text: string; color: string } => {
-  if (prev === null) return { text: 'mese scorso: nessun costo', color: C.faint }
-  if (prev === 0) return { text: `mese scorso ${money(0, currency)}`, color: C.faint }
-  const pct = Math.round(((month - prev) / prev) * 100)
-  return { text: `${pct > 0 ? '▲' : '▼'} ${Math.abs(pct)}% sul mese scorso (${money(prev, currency)})`, color: pct > 0 ? STATUS.busy.color : STATUS.ok.color }
+/** This month and last month of the cards shown (taken-out and hidden resources are not the project's cost). */
+const totalOf = (cards: AzCard[]): { month: number; prevMonth: number | null } => {
+  const withPrev = cards.filter(c => c.cost?.prevMonth != null)
+  return {
+    month: cards.reduce((s, c) => s + (c.cost?.month ?? 0), 0),
+    prevMonth: withPrev.length === 0 ? null : withPrev.reduce((s, c) => s + (c.cost?.prevMonth ?? 0), 0),
+  }
 }
 
 export const costBox = ({ Box, Text, Button }: Els, Svg: SvgEl, act: Handlers, cache: AzCache, cards: AzCard[], isBusy: boolean, now: Ms) => {
   const cost = cache.cost
   const parts = costByType(cards)
+  const total = totalOf(cards)
   const error = cache.errors.cost
   const when = cache.costAt === undefined ? 'costi mai letti' : `costi aggiornati ${ago(now, cache.costAt)}`
   return (
@@ -54,9 +56,10 @@ export const costBox = ({ Box, Text, Button }: Els, Svg: SvgEl, act: Handlers, c
       {cost === undefined
         ? <Text bold color={C.text}>Costo del mese: non ancora letto</Text>
         : (
+          // the month so far beside the whole of last month: no percentage, which would read as a saving on the 5th
           <Box flexDirection="row" justifyContent="space-between" flexWrap="wrap" gap={1}>
-            <Text bold color={C.text}>Costo del mese {money(cost.month, cost.currency)}</Text>
-            <Text color={trendText(cost.month, cost.prevMonth, cost.currency).color}>{trendText(cost.month, cost.prevMonth, cost.currency).text}</Text>
+            <Text bold color={C.text}>Costo del mese {money(total.month, cost.currency)}</Text>
+            <Text color={C.faint}>{total.prevMonth === null ? 'mese scorso: nessun costo' : `mese scorso ${money(total.prevMonth, cost.currency)}`}</Text>
           </Box>
         )}
       {cost !== undefined && Svg ? <Svg source={costBar(parts, BAR_WIDTH, 14)} alt="Costo del mese per tipo di risorsa" width={BAR_WIDTH} height={14} /> : null}

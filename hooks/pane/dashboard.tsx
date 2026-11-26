@@ -204,6 +204,7 @@ export async function drawDashboard($: EngineInterface, e: RenderInput<'Pane'>) 
   const row = (c: AzCard) => {
     // a failed row is open by itself until the user closes it (decision «Quali informazioni in più mostrare»)
     const isOpen = ui.openCard === c.id || (c.status === 'failed' && !(ui.closed ?? []).includes(c.id))
+    const cost = rowCost(c, currency)
     return (
       <Box key={`row-${c.id}`} flexDirection="column" paddingX={1} backgroundColor={isOpen ? C.surface2 : C.bg} hover={{ backgroundColor: C.surface2 }}>
         <Box flexDirection="row" alignItems="center" gap={1}>
@@ -212,7 +213,7 @@ export async function drawDashboard($: EngineInterface, e: RenderInput<'Pane'>) 
           <Box flexGrow={1}>
             <Text color={c.status === 'failed' ? STATUS.failed.color : C.muted} wrap="truncate-end">{keyFact(c)}</Text>
           </Box>
-          {rowCost(c, currency) === '' ? null : <Text color={C.faint}>{rowCost(c, currency)}</Text>}
+          {cost === '' ? null : <Text color={C.faint}>{cost}</Text>}
         </Box>
         {isOpen ? facts(c) : null}
       </Box>

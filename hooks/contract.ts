@@ -97,9 +97,12 @@ export const groupIdOf = (id: AzId): AzGroupId => {
 export const isHidden = (card: AzCard, rules: AzRules, showAuto: boolean): boolean =>
   card.id in rules.excludes || (card.autoCreated && !showAuto)
 
-/** An activity is "by Claude" when a hook event touched the same resource within windowMs before it. */
+/**
+ * An activity is "by Claude" when a hook event touched the same resource within windowMs of it,
+ * either side: the hook stamps the event when az returns, after Azure has logged the change.
+ */
 export const isByClaude = (a: AzActivity, events: AzEvent[], windowMs = 120_000): boolean =>
-  events.some(e => (e.ids ?? []).includes(a.resourceId) && e.at <= a.at && a.at - e.at <= windowMs)
+  events.some(e => (e.ids ?? []).includes(a.resourceId) && Math.abs(a.at - e.at) <= windowMs)
 
 /** Month-to-date above 1.5 × last month's total (decision «Quali informazioni in più mostrare»). */
 export const SPIKE = 1.5
@@ -108,7 +111,7 @@ export const isCostSpike = (cost: AzCost | undefined): boolean =>
 
 /** A card's warnings: those read with its state, plus the cost spike (costs arrive on their own rhythm). */
 export const warningsFor = (card: AzCard): AzWarning[] =>
-  isCostSpike(card.cost) && !card.warnings.includes('cost-spike') ? [...card.warnings, 'cost-spike'] : card.warnings
+  isCostSpike(card.cost) ? [...card.warnings, 'cost-spike'] : card.warnings
 
 /** Most serious first. Not computed: public-access (a Basic registry cannot turn it off), build-not-ready (later). */
 export const WARNING_ORDER: AzWarning[] = ['revision-failed', 'app-stopped', 'cost-spike', 'kv-protection-off', 'registry-admin']

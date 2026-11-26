@@ -45,8 +45,11 @@ export type CostRead = { currency: string; byId: Record<AzId, AzCost>; total: Az
 
 type Answer = { properties?: { columns?: { name?: unknown }[]; rows?: unknown[][] } }
 
-/** This month → `month`, last month → `prevMonth` (null when Azure has no row for it). */
-export const parseCost = (answer: unknown, now: number): CostRead => {
+/**
+ * This month → `month`, last month → `prevMonth` (null when Azure has no row for it). With no row
+ * at all Azure names no currency: the one read before stays (`fallbackCurrency`).
+ */
+export const parseCost = (answer: unknown, now: number, fallbackCurrency = 'EUR'): CostRead => {
   const p = (answer as Answer | null)?.properties
   const names = (p?.columns ?? []).map(c => String(c.name))
   const col = (n: string): number => names.indexOf(n)
@@ -54,7 +57,7 @@ export const parseCost = (answer: unknown, now: number): CostRead => {
   const thisMonth = monthStart(now, 0)
   const lastMonth = monthStart(now, -1)
   const byId: Record<AzId, AzCost> = {}
-  let currency = 'EUR'
+  let currency = fallbackCurrency
   for (const row of Array.isArray(p?.rows) ? p.rows : []) {
     const id = String(row[iId] ?? '').toLowerCase()
     const cost = Number(row[iCost])
