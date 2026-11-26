@@ -34,32 +34,55 @@ export const cacheForSubscription = (cache: AzCache | null, sub: { id: string; n
     ? { ...cache, subscription: sub }
     : { schemaVersion: 1, projectKey: key, subscription: sub, groups: {}, resources: {}, activity: [], errors: {} }
 
-/** When a part was last read, or last failed: the newer stamp wins when two photos meet. */
-const costStamp = (c: AzCache): number => Math.max(c.costAt ?? -1, c.errors.cost?.at ?? -1)
-const activityStamp = (c: AzCache): number => Math.max(c.activityAt ?? -1, c.errors.activity?.at ?? -1)
+/** A change for the photo of `subId` only: a photo of another subscription (az account set meanwhile) stays as it is. */
+export const forSubscription = (subId: string, patch: (c: AzCache) => AzCache) => (c: AzCache | null): AzCache | null =>
+  c === null || c.subscription.id !== subId ? c : patch(c)
+
+/**
+ * The error a part keeps after two photos meet: the newest one, and only when it came after the
+ * newest data (a read that worked later means the error is over).
+ */
+const errorAfter = (a: AzError | undefined, b: AzError | undefined, newestData: number): AzError | undefined => {
+  const newest = a === undefined ? b : b === undefined ? a : b.at > a.at ? b : a
+  return newest !== undefined && newest.at > newestData ? newest : undefined
+}
+
+/** `errors` with `kind` set to `error`, or without it. */
+const withError = (errors: AzCache['errors'], kind: 'cost' | 'activity', error: AzError | undefined): AzCache['errors'] => {
+  const { [kind]: _old, ...rest } = errors
+  return error === undefined ? rest : { ...rest, [kind]: error }
+}
 
 /**
  * `next` with the costs and the activities of `other` when those were read later (another write
- * landed meanwhile, or another session saved them). Another subscription or project: `next` as is.
- * Returns `next` itself when nothing is newer.
+ * landed meanwhile, or another session saved them); each part's data goes by the time it was read,
+ * its error by `errorAfter`, so a newer error never brings back older data. Another subscription
+ * or project: `next` as is. Returns `next` itself when nothing changes.
  */
 export const keepNewerReads = (next: AzCache, other: AzCache | null): AzCache => {
   if (other === null || other.subscription.id !== next.subscription.id || other.projectKey !== next.projectKey) return next
   let out = next
-  if (costStamp(other) > costStamp(out)) {
-    const { cost: _mine, ...errors } = out.errors
-    const resources = Object.fromEntries(Object.entries(out.resources).map(([id, card]) => {
-      const cost = other.resources[id]?.cost
-      return [id, cost === undefined ? card : { ...card, cost }]
-    }))
-    out = { ...out, resources, errors: other.errors.cost === undefined ? errors : { ...errors, cost: other.errors.cost } }
-    if (other.cost !== undefined) out.cost = other.cost
-    if (other.costAt !== undefined) out.costAt = other.costAt
+  const costNewer = (other.costAt ?? -1) > (out.costAt ?? -1)
+  const costError = errorAfter(out.errors.cost, other.errors.cost, Math.max(out.costAt ?? -1, other.costAt ?? -1))
+  if (costNewer || costError !== out.errors.cost) {
+    out = { ...out, errors: withError(out.errors, 'cost', costError) }
+    if (costNewer) {
+      out.resources = Object.fromEntries(Object.entries(out.resources).map(([id, card]) => {
+        const cost = other.resources[id]?.cost
+        return [id, cost === undefined ? card : { ...card, cost }]
+      }))
+      if (other.cost !== undefined) out.cost = other.cost
+      if (other.costAt !== undefined) out.costAt = other.costAt
+    }
   }
-  if (activityStamp(other) > activityStamp(out)) {
-    const { activity: _mine, ...errors } = out.errors
-    out = { ...out, activity: other.activity, errors: other.errors.activity === undefined ? errors : { ...errors, activity: other.errors.activity } }
-    if (other.activityAt !== undefined) out.activityAt = other.activityAt
+  const activityNewer = (other.activityAt ?? -1) > (out.activityAt ?? -1)
+  const activityError = errorAfter(out.errors.activity, other.errors.activity, Math.max(out.activityAt ?? -1, other.activityAt ?? -1))
+  if (activityNewer || activityError !== out.errors.activity) {
+    out = { ...out, errors: withError(out.errors, 'activity', activityError) }
+    if (activityNewer) {
+      out.activity = other.activity
+      if (other.activityAt !== undefined) out.activityAt = other.activityAt
+    }
   }
   return out
 }

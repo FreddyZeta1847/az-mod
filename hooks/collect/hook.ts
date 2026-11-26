@@ -13,12 +13,16 @@ import { parseAz } from './parse-az'
 type ToolHook = HookOf<'tool.call'>
 
 async function onShellCall($: EngineInterface, e: Parameters<ToolHook>[1], next: Parameters<ToolHook>[2]) {
+  const startedAt = await $.clock.now()
   const ran = await next(e)
   if (e.tool !== 'Bash' && e.tool !== 'PowerShell') return ran
   const command = 'command' in e && typeof e.command === 'string' ? e.command : ''
   const parsed = parseAz(command, await $.clock.now(), await $.session.id())
   if (parsed !== null) {
-    if (parsed !== 'unclear') parsed.exit = ran.deny === undefined && ran.isError !== true ? 0 : 1
+    if (parsed !== 'unclear') {
+      parsed.exit = ran.deny === undefined && ran.isError !== true ? 0 : 1
+      parsed.startedAt = startedAt
+    }
     void afterAzCommand($, parsed)
   }
   return ran

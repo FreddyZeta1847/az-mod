@@ -23,6 +23,16 @@ const event = (at: number, ids: string[]): AzEvent => ({
   at, sessionId: 's1', cmdGroup: 'containerapp', verb: 'update', isWrite: true, ids, exit: 0,
 })
 
+test('m2 m5 da Claude: only writes that worked, from the start to the end of the command', async () => {
+  const activity: AzActivity = { at: 200_000, op: 'update', status: 'Accepted', resourceId: ID_A }
+  // m2: a read, or a write that failed, near someone else's change is not Claude's
+  expect(isByClaude(activity, [{ ...event(210_000, [ID_A]), isWrite: false, verb: 'show' }])).toBe(false)
+  expect(isByClaude(activity, [{ ...event(210_000, [ID_A]), exit: 1 }])).toBe(false)
+  // m5: a 10-minute `az containerapp up`: Azure logs the change near its start, the hook stamps its end
+  expect(isByClaude(activity, [{ ...event(800_000, [ID_A]), startedAt: 190_000 }])).toBe(true)
+  expect(isByClaude(activity, [event(800_000, [ID_A])])).toBe(false)
+})
+
 test('normalizeName makes folder and group names comparable', async () => {
   expect(normalizeName("L'Atelier")).toBe('l-atelier')
   expect(normalizeName('Green House')).toBe('green-house')

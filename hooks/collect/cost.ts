@@ -9,8 +9,12 @@ import type { AzCost, AzId } from '../../types'
 
 export const COST_MS = 12 * 3_600_000
 
-/** The cost loop's own memory: a refusal of the cost API never delays the state Update. */
-export const costLoop = { backoffUntil: 0 }
+/**
+ * The cost loop's own memory (a refusal of the cost API never delays the state Update):
+ * `throttledUntil` after a 429 holds the button too; `backoffUntil` after any other error
+ * holds only the timer, so a press after `az login` or a new role tries again at once.
+ */
+export const costLoop = { backoffUntil: 0, throttledUntil: 0 }
 
 export const costUrl = (subId: string): string =>
   `https://management.azure.com/subscriptions/${subId}/providers/Microsoft.CostManagement/query?api-version=2023-11-01`

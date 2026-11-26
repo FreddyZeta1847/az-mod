@@ -98,11 +98,13 @@ export const isHidden = (card: AzCard, rules: AzRules, showAuto: boolean): boole
   card.id in rules.excludes || (card.autoCreated && !showAuto)
 
 /**
- * An activity is "by Claude" when a hook event touched the same resource within windowMs of it,
- * either side: the hook stamps the event when az returns, after Azure has logged the change.
+ * An activity is "by Claude" when a write of Claude that worked touched the same resource while
+ * it ran: from the command's start to its end, windowMs either side (Azure logs a long
+ * `az … up` near its start, the hook stamps the end). Reads and failed writes never count.
  */
 export const isByClaude = (a: AzActivity, events: AzEvent[], windowMs = 120_000): boolean =>
-  events.some(e => (e.ids ?? []).includes(a.resourceId) && Math.abs(a.at - e.at) <= windowMs)
+  events.some(e => e.isWrite && e.exit === 0 && (e.ids ?? []).includes(a.resourceId)
+    && a.at >= (e.startedAt ?? e.at) - windowMs && a.at <= e.at + windowMs)
 
 /** Month-to-date above 1.5 × last month's total (decision «Quali informazioni in più mostrare»). */
 export const SPIKE = 1.5

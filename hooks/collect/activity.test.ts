@@ -178,6 +178,22 @@ test('an activity error never stops the state update', async ($, on) => {
   await w.waitFor(() => w.runs.some(isGraph))
 })
 
+test('m4 a target that asks to wait is not asked again before the wait is over', async ($, on) => {
+  const w = startWorld(on, { files: savedRules(), az: a => (isActivity(a) && a.includes('--resource-id') ? result(1, '', 'ERROR: (429) Too many requests. Retry-After: 600') : undefined) })
+  await startSaved($, w)
+  await w.clock.advance(30_000)
+  await w.waitFor(() => w.seen.cache?.activityAt !== undefined && w.idle())
+  expect(w.seen.cache?.errors.activity?.code).toBe('throttled')
+  const before = activityCalls(w).length
+  const ui = await $.ui.mount(PANE)
+  const card = DEMO_SUITE_ROWS.find(r => r.name === 'app-control')?.id as string
+  await w.clock.advance(150_000)
+  await ui.press({ key: `open-${card}` }) // older than 2 min, but Azure asked for 10
+  await w.pause(50)
+  expect(activityCalls(w).length).toBe(before)
+  await ui.unmount()
+})
+
 test('k7 one target that cannot be read does not hide the others', async ($, on) => {
   const w = startWorld(on, { files: savedRules(), az: a => (isActivity(a) && a.includes('--resource-id') ? result(1, '', 'ERROR: (AuthorizationFailed) no access') : undefined) })
   await startSaved($, w)

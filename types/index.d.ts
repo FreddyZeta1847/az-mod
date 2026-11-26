@@ -78,7 +78,10 @@ export type AzCache = {
 
 /** In memory only: what the hook understood of one az command. Never its text. */
 export type AzEvent = {
+  /** When the command returned. */
   at: Ms
+  /** When the command started (a long `az … up` logs its change near the start). */
+  startedAt?: Ms
   sessionId: string
   cmdGroup: string
   verb: string

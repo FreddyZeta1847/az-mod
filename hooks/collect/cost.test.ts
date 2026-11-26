@@ -7,7 +7,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { costBody, costDue, parseCost } from './cost'
-import { keepNewerReads } from './refresh'
+import { forSubscription, keepNewerReads } from './refresh'
 import { NOW, result, ROOT, startWorld } from './world'
 import type { World } from './world'
 import { DEMO_SUITE_ROWS, rid, SUB } from '../fixtures/azure'
@@ -209,4 +209,27 @@ test('k10 every page of the cost answer is read', async ($, on) => {
   await w.waitFor(() => w.seen.cache?.costAt !== undefined && w.idle())
   expect(costCalls(w)).toBe(2)
   expect(w.seen.cache?.cost?.month).toBe(35)
+})
+
+test('m3 a newer error never brings back older costs', async () => {
+  const fresh = photo({ costAt: NOW - 1_000, cost: { currency: 'EUR', month: 20, prevMonth: null } })
+  const olderWithError = photo({ costAt: NOW - 50_000, cost: { currency: 'EUR', month: 5, prevMonth: null }, errors: { cost: { at: NOW, code: 'throttled', message: 'busy' } } })
+  for (const kept of [keepNewerReads(fresh, olderWithError), keepNewerReads(olderWithError, fresh)]) {
+    expect(kept.cost?.month).toBe(20)
+    expect(kept.costAt).toBe(NOW - 1_000)
+    expect(kept.errors.cost?.code).toBe('throttled')
+  }
+  // an error older than the newest costs is over
+  const healed = keepNewerReads(photo({ costAt: NOW, cost: { currency: 'EUR', month: 1, prevMonth: null } }),
+    photo({ errors: { cost: { at: NOW - 5_000, code: 'other', message: 'x' } } }))
+  expect(healed.errors.cost).toBeUndefined()
+})
+
+test('k12 a read lands only in the photo of the subscription it was asked for', async () => {
+  const setCost = forSubscription(SUB.id, c => ({ ...c, cost: { currency: 'EUR', month: 7, prevMonth: null }, costAt: NOW }))
+  expect(setCost(photo())?.cost?.month).toBe(7)
+  // az account set to another subscription while the read ran: its photo is left as it is
+  const other = photo({ subscription: { id: 'other', name: 'Other' } })
+  expect(setCost(other)).toBe(other)
+  expect(setCost(null)).toBe(null)
 })

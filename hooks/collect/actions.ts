@@ -15,7 +15,7 @@ import { costBody, costDue, costLoop, costUrl, parseCost } from './cost'
 import type { AzRun } from './az'
 import { graphRows, inScope, linkRegistries, markGone, readOne, readProject } from './graph'
 import { resolveProject } from './project'
-import { cacheForSubscription, keepNewerReads, loop, noteError, noteSuccess, resume, shouldRefresh, intervalFor, TICK_MS } from './refresh'
+import { cacheForSubscription, forSubscription, keepNewerReads, loop, noteError, noteSuccess, resume, shouldRefresh, intervalFor, TICK_MS } from './refresh'
 import { addGroupTo, dismissIn, excludeIn, includeIn, isGroupId, rankSearch, removeGroupFrom, restoreIn } from './rules-ops'
 import { projectFiles, scanCandidates } from './scan'
 import type { ScanRow } from './scan'
@@ -80,7 +80,7 @@ async function setCache($: EngineInterface, cache: AzCache): Promise<void> {
  * changes when the photo now belongs to another subscription (az account set during the read).
  */
 async function patchCache($: EngineInterface, subId: string, patch: (c: AzCache) => AzCache): Promise<void> {
-  await change($, cacheAtom, c => (c === null || c.subscription.id !== subId ? c : patch(c)))
+  await change($, cacheAtom, forSubscription(subId, patch))
   const latest = await read($, cacheAtom)
   if (latest !== null) await saveCache($, latest)
 }
@@ -332,8 +332,8 @@ async function readCosts($: EngineInterface, force = false): Promise<void> {
   const [project, rules, cache, busy] = await Promise.all([read($, projectAtom), read($, rulesAtom), read($, cacheAtom), read($, busyAtom)])
   if (project === null || rules === null || cache === null || busy.cost) return
   const now = await $.clock.now()
-  // a press waits for Azure too: pressing again while throttled only makes the wait longer
-  if (now < costLoop.backoffUntil || (!force && !costDue(now, cache.costAt))) return
+  // a press waits only for a throttling (pressing again then makes it longer); the timer waits for any error
+  if (now < costLoop.throttledUntil || (!force && (!costDue(now, cache.costAt) || now < costLoop.backoffUntil))) return
   const groupNames = Object.keys(rules.groups).map(g => g.slice(g.lastIndexOf('/') + 1))
   const ids = Object.keys(rules.includes).filter(id => !(groupIdOf(id) in rules.groups))
   if (groupNames.length === 0 && ids.length === 0) return
@@ -345,11 +345,13 @@ async function readCosts($: EngineInterface, force = false): Promise<void> {
     await $.fs.write(bodyPath, JSON.stringify(costBody(groupNames, ids, now)))
     const r = await costPages($, costUrl(subId), bodyPath)
     if (!r.ok) {
-      costLoop.backoffUntil = r.error.retryAt ?? now + (r.error.code === 'throttled' ? 30 : 60) * 60_000
+      if (r.error.code === 'throttled') costLoop.throttledUntil = r.error.retryAt ?? now + 30 * 60_000
+      else costLoop.backoffUntil = now + 60 * 60_000
       const error = r.error
       return await patchCache($, subId, c => ({ ...c, errors: { ...c.errors, cost: error } }))
     }
     costLoop.backoffUntil = 0
+    costLoop.throttledUntil = 0
     const costs = parseCost(r.json, now, cache.cost?.currency)
     await patchCache($, subId, c => {
       const resources = Object.fromEntries(Object.entries(c.resources)
@@ -400,7 +402,8 @@ async function readActivity($: EngineInterface, isOpening = false): Promise<void
       const error = failed
       return await patchCache($, subId, c => ({ ...c, errors: { ...c.errors, activity: error } }))
     }
-    activityLoop.backoffUntil = 0
+    // a target that answered 429 is not asked again before its wait, the others with it
+    activityLoop.backoffUntil = failed?.retryAt ?? 0
     const activity = parseActivity(rows, now)
     await patchCache($, subId, c => {
       const { activity: _old, ...errors } = c.errors
@@ -627,6 +630,7 @@ async function startLoop($: EngineInterface): Promise<void> {
   loop.cancel?.()
   loop.startedAt = await $.clock.now()
   costLoop.backoffUntil = 0
+  costLoop.throttledUntil = 0
   activityLoop.backoffUntil = 0
   activityLoop.isReading = false
   loop.cancel = $.clock.every(TICK_MS, () => { void tick($).catch(() => undefined) }).cancel

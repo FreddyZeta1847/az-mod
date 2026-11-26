@@ -182,6 +182,22 @@ test('k11 the cost button waits while Azure is throttling', async ($, on) => {
   await ui.unmount()
 })
 
+test('m1 after a cost error that is not throttling, the button tries again at once', async ($, on) => {
+  const isCost = (a: string[]): boolean => a[1] === 'rest' && a.some(x => x.includes('Microsoft.CostManagement/query'))
+  let refused = true
+  const w = startWorld(on, { az: a => (isCost(a) && refused ? result(1, '', 'ERROR: (AuthorizationFailed) no access to cost data') : undefined) })
+  await w.start($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'refresh-cost' })
+  await w.waitFor(() => w.seen.cache?.errors.cost?.code === 'forbidden' && w.idle())
+  // the user gets the role (or runs az login) and presses again: no hour of waiting
+  refused = false
+  await ui.press({ key: 'refresh-cost' })
+  await w.waitFor(() => w.seen.cache?.cost !== undefined && w.seen.cache.errors.cost === undefined)
+  expect(w.runs.filter(isCost).length).toBe(2)
+  await ui.unmount()
+})
+
 test('the cost button reaches Raccolta', async ($, on) => {
   const w = startWorld(on)
   await w.start($)
