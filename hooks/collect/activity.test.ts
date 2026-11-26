@@ -232,3 +232,21 @@ test('n2 the longest wait over every refused target holds the next read', async 
   expect(activityCalls(w).length).toBe(before)
   await ui.unmount()
 })
+
+test('a short wait asked by Azure is kept when every target is throttled', async ($, on) => {
+  const rules: AzRules = {
+    schemaVersion: 1, project: { key: 'demo-suite', mainRoot: ROOT, remote: null },
+    groups: { [gid('rg-demo-suite')]: { at: 1 } }, includes: {}, excludes: {}, dismissed: {}, updatedAt: 1,
+  }
+  const w = startWorld(on, {
+    files: { '/data/projects/demo-suite.rules.json': JSON.stringify(rules) },
+    az: a => (isActivity(a) ? result(1, '', 'ERROR: (429) Too many requests. Retry-After: 30') : undefined),
+  })
+  await startSaved($, w)
+  await w.clock.advance(30_000)
+  await w.waitFor(() => w.seen.cache?.errors.activity?.code === 'throttled' && w.idle())
+  const before = activityCalls(w).length
+  // Azure asked for 30 s: the timer tries again after them, not after 15 minutes
+  await w.clock.advance(60_000)
+  await w.waitFor(() => activityCalls(w).length > before)
+})

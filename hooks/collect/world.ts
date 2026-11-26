@@ -105,7 +105,7 @@ export const startWorld = (on: On, options: WorldOptions = {}): World => {
   on('command.register', () => ({ value: { command: 'az' } }))
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   // the command itself answers at tool.run (after the permission step), as in a session
-  on('tool.run', () => (options.toolFails === true ? { deny: 'the command failed' } : { result: options.toolResult ?? {} }))
+  on('tool.run', () => (options.toolFails === true ? { result: options.toolResult ?? {}, isError: true } : { result: options.toolResult ?? {} }))
   on('state.set', ($, e, next) => {
     const change = e as unknown as { plugin: string; key: string; value: unknown }
     if (change.plugin === 'az-mod') {
