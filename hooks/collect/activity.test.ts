@@ -201,4 +201,34 @@ test('k7 one target that cannot be read does not hide the others', async ($, on)
   await w.waitFor(() => w.seen.cache?.activityAt !== undefined && w.idle())
   expect(w.seen.cache?.activity.length).toBe(3)
   expect(w.seen.cache?.errors.activity?.code).toBe('forbidden')
+  // n1: the next ticks merge the saved photo again: the error stays while the target is refused
+  await w.clock.advance(60_000)
+  await w.pause(50)
+  expect(w.seen.cache?.errors.activity?.code).toBe('forbidden')
+})
+
+test('n2 the longest wait over every refused target holds the next read', async ($, on) => {
+  const second = rid('rg-third', 'microsoft.storage/storageaccounts', 'stthird')
+  const rules: AzRules = {
+    schemaVersion: 1, project: { key: 'demo-suite', mainRoot: ROOT, remote: null },
+    groups: { [gid('rg-demo-suite')]: { at: 1 } }, includes: { [OTHER]: { at: 1 }, [second]: { at: 1 } }, excludes: {}, dismissed: {}, updatedAt: 1,
+  }
+  // the group answers; OTHER is refused first (403), then the second one is throttled with no Retry-After
+  const w = startWorld(on, {
+    files: { '/data/projects/demo-suite.rules.json': JSON.stringify(rules) },
+    az: a => (!isActivity(a) ? undefined
+      : a.includes(OTHER) ? result(1, '', 'ERROR: (AuthorizationFailed) no access')
+        : a.includes(second) ? result(1, '', 'ERROR: (429) Too many requests') : undefined),
+  })
+  await startSaved($, w)
+  await w.clock.advance(30_000)
+  await w.waitFor(() => w.seen.cache?.activityAt !== undefined && w.idle())
+  const before = activityCalls(w).length
+  const ui = await $.ui.mount(PANE)
+  const card = DEMO_SUITE_ROWS.find(r => r.name === 'app-control')?.id as string
+  await w.clock.advance(150_000)
+  await ui.press({ key: `open-${card}` })
+  await w.pause(50)
+  expect(activityCalls(w).length).toBe(before)
+  await ui.unmount()
 })

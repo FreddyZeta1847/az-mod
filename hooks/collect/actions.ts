@@ -387,23 +387,26 @@ async function readActivity($: EngineInterface, isOpening = false): Promise<void
     const rows: unknown[] = []
     let failed: AzError | undefined
     let answered = 0
+    let throttledUntil = 0
     // one target refused (a group without access) keeps the others' changes, with its error beside them
     for (const target of targets) {
       const r = await runAz($, activityArgs(target, subId), 120_000)
       if (!r.ok) {
         failed ??= r.error
+        // the longest wait any throttled target asked for (none given: 15 min), whatever came first
+        if (r.error.code === 'throttled') throttledUntil = Math.max(throttledUntil, r.error.retryAt ?? now + 15 * 60_000)
         continue
       }
       answered += 1
       if (Array.isArray(r.json)) rows.push(...(r.json as unknown[]))
     }
     if (answered === 0 && failed !== undefined) {
-      activityLoop.backoffUntil = failed.retryAt ?? now + 15 * 60_000
+      activityLoop.backoffUntil = Math.max(throttledUntil, now + 15 * 60_000)
       const error = failed
       return await patchCache($, subId, c => ({ ...c, errors: { ...c.errors, activity: error } }))
     }
     // a target that answered 429 is not asked again before its wait, the others with it
-    activityLoop.backoffUntil = failed?.retryAt ?? 0
+    activityLoop.backoffUntil = throttledUntil
     const activity = parseActivity(rows, now)
     await patchCache($, subId, c => {
       const { activity: _old, ...errors } = c.errors

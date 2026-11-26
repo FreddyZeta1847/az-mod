@@ -44,7 +44,8 @@ export const forSubscription = (subId: string, patch: (c: AzCache) => AzCache) =
  */
 const errorAfter = (a: AzError | undefined, b: AzError | undefined, newestData: number): AzError | undefined => {
   const newest = a === undefined ? b : b === undefined ? a : b.at > a.at ? b : a
-  return newest !== undefined && newest.at > newestData ? newest : undefined
+  // `>=`: a target refused during a read that kept the others has the same time as that read
+  return newest !== undefined && newest.at >= newestData ? newest : undefined
 }
 
 /** `errors` with `kind` set to `error`, or without it. */
