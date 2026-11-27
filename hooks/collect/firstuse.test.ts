@@ -51,3 +51,16 @@ test('u5 an empty list is no fact; a list of names reads as a list', async () =>
   expect(rowToCard({ ...site, customDomains: '["www.example.com","example.com"]' }, NOW, 'group').facts.customDomains)
     .toBe('www.example.com, example.com')
 })
+
+test('u7 a session moved to another folder scans it, though its old Scan was left in progress', async ($, on) => {
+  // the desktop app keeps a spare session ready and moves it to the folder opened: the mod reloads,
+  // but $.state keeps what the spare one left (a Scan "in progress" that will never end)
+  // stale until the mod writes `busy` itself (the world records every write in w.seen)
+  const w = startWorld(on)
+  on('state.get', (_$, e, next) => (w.seen.busy === undefined && e.plugin === 'az-mod' && e.key === 'busy'
+    ? { value: { value: { shape: 'busy-1', value: { scan: true, update: true, cost: true, ids: [] } }, version: 1 } }
+    : next(e)))
+  // ends only once the Scan adopted the project group and Azure was read
+  await w.start($)
+  expect(Object.keys(w.seen.rules?.groups ?? {})).toHaveLength(1)
+})

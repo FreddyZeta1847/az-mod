@@ -646,13 +646,20 @@ async function startLoop($: EngineInterface): Promise<void> {
 /** Session start: who we are, the saved rules and photo into state, Scan on a first open, then the timer. */
 export async function boot($: EngineInterface): Promise<void> {
   try {
+    // $.state outlives a reload: the desktop app moves a spare session (booted in a temporary
+    // folder) to the folder opened, and what that load left in progress will never end here
+    await setBusy($, { scan: false, update: false, cost: false, ids: [] })
+    await change($, suggestionsAtom, () => [])
+    await change($, foundAtom, () => [])
+    await change($, autoAddedAtom, () => null)
     const loaded = await loadRules($, await resolveProject($))
     const project = { ...loaded.project, key: loaded.key }
     await change($, projectAtom, () => project)
     await change($, rulesAtom, () => loaded.rules)
-    await setHealth($, { rulesMode: loaded.mode })
+    await setHealth($, { rulesMode: loaded.mode, error: undefined })
+    // the photo of this folder, or none (never the one the previous folder left)
     const cache = await loadCache($, loaded.key)
-    if (cache !== null) await change($, cacheAtom, () => cache)
+    await change($, cacheAtom, () => cache)
     await startLoop($)
     if (loaded.rules === null && loaded.mode === 'ok') await scanProject($, true)
   } catch {
