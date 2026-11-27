@@ -1,13 +1,14 @@
 /*
  * contract.ts — the runtime half of the az-mod contract, shared by Raccolta (collect/)
  * and Pannello (pane/): state atoms, constants (fact keys per type, Azure auto-created
- * types, write verbs), the AzActions interface the pane calls, and small pure helpers.
+ * types, write verbs), the AzActions interface the pane calls, and small pure helpers
+ * (among them the warnings and the «Da guardare» rows).
  * Owned by the main session; the two parts import it and never edit it.
  * (Revised 25/11: the AzActions interface became the button-key contract below.)
  */
 import { atom } from 'claude-code'
 
-import type { AzActivity, AzCard, AzEvent, AzFactKey, AzGroupId, AzId, AzRules } from '../types'
+import type { AzActivity, AzCard, AzCost, AzEvent, AzFactKey, AzGroupId, AzId, AzRules, AzWarning } from '../types'
 
 export const PLUGIN = 'az-mod'
 export const PANE = 'az-mod'
@@ -96,6 +97,33 @@ export const groupIdOf = (id: AzId): AzGroupId => {
 export const isHidden = (card: AzCard, rules: AzRules, showAuto: boolean): boolean =>
   card.id in rules.excludes || (card.autoCreated && !showAuto)
 
-/** An activity is "by Claude" when a hook event touched the same resource within windowMs before it. */
+/**
+ * An activity is "by Claude" when a write of Claude that worked touched the same resource while
+ * it ran: from the command's start to its end, windowMs either side (Azure logs a long
+ * `az … up` near its start, the hook stamps the end). Reads and failed writes never count.
+ */
 export const isByClaude = (a: AzActivity, events: AzEvent[], windowMs = 120_000): boolean =>
-  events.some(e => (e.ids ?? []).includes(a.resourceId) && e.at <= a.at && a.at - e.at <= windowMs)
+  events.some(e => e.isWrite && e.exit === 0 && (e.ids ?? []).includes(a.resourceId)
+    && a.at >= (e.startedAt ?? e.at) - windowMs && a.at <= e.at + windowMs)
+
+/** Month-to-date above 1.5 × last month's total (decision «Quali informazioni in più mostrare»). */
+export const SPIKE = 1.5
+export const isCostSpike = (cost: AzCost | undefined): boolean =>
+  cost !== undefined && cost.prevMonth !== null && cost.prevMonth > 0 && cost.month > SPIKE * cost.prevMonth
+
+/** A card's warnings: those read with its state, plus the cost spike (costs arrive on their own rhythm). */
+export const warningsFor = (card: AzCard): AzWarning[] =>
+  isCostSpike(card.cost) ? [...card.warnings, 'cost-spike'] : card.warnings
+
+/** Most serious first. Not computed: public-access (a Basic registry cannot turn it off), build-not-ready (later). */
+export const WARNING_ORDER: AzWarning[] = ['revision-failed', 'app-stopped', 'cost-spike', 'kv-protection-off', 'registry-admin']
+export type WatchRow = { id: AzId; name: string; warning: AzWarning }
+
+/** «Da guardare»: one row per warning of the cards given (the caller passes the visible ones), at most `max`. */
+export const watchList = (cards: AzCard[], max = 4): { rows: WatchRow[]; more: number } => {
+  const rank = (w: AzWarning): number => (WARNING_ORDER.includes(w) ? WARNING_ORDER.indexOf(w) : WARNING_ORDER.length)
+  const all = cards.filter(c => c.goneAt === undefined)
+    .flatMap(c => warningsFor(c).map((warning): WatchRow => ({ id: c.id, name: c.name, warning })))
+    .sort((a, b) => rank(a.warning) - rank(b.warning) || a.name.localeCompare(b.name))
+  return { rows: all.slice(0, max), more: Math.max(0, all.length - max) }
+}

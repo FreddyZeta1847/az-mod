@@ -55,6 +55,7 @@ const EXPECTED: Record<string, ReturnType<typeof parseKey>> = {
   'scan': { action: 'scan' },
   'undo-auto': { action: 'undo-auto' },
   'reset-rules': { action: 'reset-rules' },
+  'refresh-cost': { action: 'refresh-cost' },
   [`accept-${SUGGESTED}`]: { action: 'accept', arg: SUGGESTED },
   [`dismiss-${SUGGESTED}`]: { action: 'dismiss', arg: SUGGESTED },
   [`remove-group-${OTHER}`]: { action: 'remove-group', arg: OTHER },

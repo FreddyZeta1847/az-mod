@@ -22,7 +22,9 @@ az-mod adds a side pane called **Azure** to Claude Code. The pane lists the Azur
 - **Automatic first Scan.** The first time you open a project, az-mod looks through your subscription. It adopts the resource group `rg-<folder name>` when it exists. It also proposes related resources, with the reason for each: same repository, an image named after the project, names found in the project's files, resources used by resources you already have.
 - **Status summary.** A donut chart and a legend count the resources by state, plus how long ago the data was refreshed.
 - **One card per resource.** Each card shows facts that depend on the resource type (for example URL, image, replicas and revision for a container app; SKU, redundancy and access tier for a storage account).
-- **Warnings.** Failed revisions, stopped apps, a container registry with the admin user enabled, and a Key Vault without soft delete or purge protection.
+- **Month's cost.** The cost of the month so far, for each resource and for the project, beside the whole of last month, with a bar by resource type. Read twice a day and with the **Aggiorna costi** button. Resources taken out of the project are not counted.
+- **Da guardare.** At most four warnings, each with its cause and what to do: a failed revision, a stopped app, a cost above 1.5 times last month, a Key Vault without soft delete or purge protection, a container registry with the admin user enabled.
+- **Recent activity.** The last week of changes in the project (created or changed, deleted, restarted, stopped…), read every 15 minutes and when you open a card. A change Claude made in this session is marked **da Claude**.
 - **Live updates.**
   - Every 2 minutes while the pane is placed.
   - Every 10 minutes after 30 minutes without input.
@@ -113,7 +115,8 @@ If the rules file and its backup are both damaged, the pane shows **Riparti da z
 
 az-mod is built to never read or keep a secret.
 
-- **Read-only Azure calls.** The mod only runs `az account show`, `az resource list`, `az resource show` and Azure Resource Graph queries (`az rest`, a POST that only reads). It never runs commands that print secrets, such as keys, connection strings, `list-keys` or Key Vault secret values.
+- **Read-only Azure calls.** The mod only runs `az account show`, `az resource list`, `az resource show`, `az monitor activity-log list`, and Azure Resource Graph and Cost Management queries (`az rest`, a POST that only reads). It never runs commands that print secrets, such as keys, connection strings, `list-keys` or Key Vault secret values.
+- **Activities keep four fields.** From the activity log only the time, the operation, the outcome and the resource are kept: never the content of a request, the caller or their claims.
 - **Named fields only.** The Resource Graph query asks for a fixed list of fields and never for `properties` as a whole. Container app environment variable values therefore never reach a card.
 - **Facts come from an allow-list.** Each card shows only the facts defined for its resource type.
 - **Secrets filter.** Every value read from Azure goes through a filter before it is kept. It drops anything that looks like an account key, a shared access signature, a `sig=` parameter, a JWT, a GitHub token, a password, or a long mixed-case or hex run. Kept strings are cut at 256 characters.
@@ -122,11 +125,11 @@ az-mod is built to never read or keep a secret.
 
 ## Roadmap
 
-Not done yet:
+Later:
 
-- Costs.
-- Activity.
-- Alerts.
+- Metric charts in an open card.
+- Certificate expiry dates.
+- The latest images of a container registry and the last Web App deploy.
 
 ## Project structure
 

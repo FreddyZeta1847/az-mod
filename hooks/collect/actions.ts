@@ -1,7 +1,7 @@
 /*
  * actions.ts — what Raccolta does, as plain `function name($, ...)` declarations (the
  * engine refuses $ passed to object methods or arrow functions): boot at session start,
- * Scan, Update, refresh one resource, the rule changes behind the pane's button keys,
+ * Scan, Update, refresh one resource, the month's costs, the week's activities, the rule changes behind the pane's button keys,
  * the «+ Aggiungi» search, and the 30 s timer of the automatic Update.
  * No action ever throws to its caller: the outcome lands in state (busy, health, cache,
  * rules, suggestions, found). Every rules change goes through saveRules (backup first).
@@ -9,18 +9,20 @@
 import { atom, read, update as change } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 
+import { activityArgs, activityDue, activityLoop, parseActivity } from './activity'
 import { currentSubscription, runAz } from './az'
+import { costBody, costDue, costLoop, costUrl, parseCost } from './cost'
 import type { AzRun } from './az'
 import { graphRows, inScope, linkRegistries, markGone, readOne, readProject } from './graph'
 import { resolveProject } from './project'
-import { cacheForSubscription, loop, noteError, noteSuccess, resume, shouldRefresh, intervalFor, TICK_MS } from './refresh'
+import { cacheForSubscription, forSubscription, keepNewerReads, loop, noteError, noteSuccess, resume, shouldRefresh, intervalFor, TICK_MS } from './refresh'
 import { addGroupTo, dismissIn, excludeIn, includeIn, isGroupId, rankSearch, removeGroupFrom, restoreIn } from './rules-ops'
 import { projectFiles, scanCandidates } from './scan'
 import type { ScanRow } from './scan'
-import { emptyRules, loadCache, loadRules, readSavedRules, resetRules as writeReset, saveCache, saveRules, takeLease } from './store'
+import { dataDir, emptyRules, loadCache, loadRules, readSavedRules, resetRules as writeReset, saveCache, saveRules, takeLease } from './store'
 import { groupIdOf, PANE, parseKey } from '../contract'
 import type { PaneAction } from '../contract'
-import type { AzBusy, AzCache, AzCard, AzEvent, AzHealth, AzId, AzRules, AzSuggestion } from '../../types'
+import type { AzBusy, AzCache, AzCard, AzError, AzEvent, AzHealth, AzId, AzRules, AzSuggestion } from '../../types'
 
 // The engine accepts only atoms declared in the file that reads them: exact copies of contract.ts.
 const projectAtom = atom({ plugin: 'az-mod', key: 'project' } as const, null, { shape: 'project-1' })
@@ -62,9 +64,42 @@ async function setBusyId($: EngineInterface, id: AzId, isBusy: boolean): Promise
   await change($, busyAtom, b => ({ ...b, ids: isBusy ? [...b.ids, id] : b.ids.filter(x => x !== id) }))
 }
 
+/**
+ * Writes a whole photo (an Update, one card, a group taken out) built from a copy read earlier:
+ * costs and activities that landed meanwhile are newer than that copy and are kept.
+ */
 async function setCache($: EngineInterface, cache: AzCache): Promise<void> {
-  await saveCache($, cache)
-  await change($, cacheAtom, () => cache)
+  await change($, cacheAtom, current => keepNewerReads(cache, current))
+  const latest = await read($, cacheAtom)
+  if (latest !== null) await saveCache($, latest)
+}
+
+/**
+ * Changes one part of the photo as it is now (costs and activities are read at the same time:
+ * a copy taken before the other's write would undo it), then saves the newest photo. Nothing
+ * changes when the photo now belongs to another subscription (az account set during the read).
+ */
+async function patchCache($: EngineInterface, subId: string, patch: (c: AzCache) => AzCache): Promise<void> {
+  await change($, cacheAtom, forSubscription(subId, patch))
+  const latest = await read($, cacheAtom)
+  if (latest !== null) await saveCache($, latest)
+}
+
+/** Every page of a Cost Management answer (it pages with `nextLink`), rows joined under the first page's columns. */
+async function costPages($: EngineInterface, url: string, bodyPath: string, maxPages = 10): Promise<AzRun> {
+  const rows: unknown[] = []
+  let first: { properties?: { columns?: unknown; rows?: unknown[]; nextLink?: unknown } } | undefined
+  let next: string | undefined = url
+  for (let page = 0; page < maxPages && next !== undefined; page++) {
+    const r = await runAz($, ['rest', '--method', 'post', '--url', next, '--body', `@${bodyPath}`])
+    if (!r.ok) return r
+    const answer = r.json as typeof first
+    first ??= answer
+    rows.push(...(Array.isArray(answer?.properties?.rows) ? answer.properties.rows : []))
+    const link = answer?.properties?.nextLink
+    next = typeof link === 'string' && link.startsWith('https://management.azure.com/') ? link : undefined
+  }
+  return { ok: true, json: { properties: { columns: first?.properties?.columns ?? [], rows } } }
 }
 
 /** Saves and publishes new rules; refused (and nothing changes) in read-only or broken mode. */
@@ -288,6 +323,106 @@ async function refreshOne($: EngineInterface, id: AzId): Promise<void> {
   }
 }
 
+/**
+ * The month's costs of every card (twice a day, or now with the button): one Cost Management
+ * query for the groups plus the resources included from elsewhere. A refusal waits on its own
+ * memory (Retry-After, else 30 min throttled / 60 min otherwise) and never touches the state loop.
+ */
+async function readCosts($: EngineInterface, force = false): Promise<void> {
+  const [project, rules, cache, busy] = await Promise.all([read($, projectAtom), read($, rulesAtom), read($, cacheAtom), read($, busyAtom)])
+  if (project === null || rules === null || cache === null || busy.cost) return
+  const now = await $.clock.now()
+  // a press waits only for a throttling (pressing again then makes it longer); the timer waits for any error
+  if (now < costLoop.throttledUntil || (!force && (!costDue(now, cache.costAt) || now < costLoop.backoffUntil))) return
+  const groupNames = Object.keys(rules.groups).map(g => g.slice(g.lastIndexOf('/') + 1))
+  const ids = Object.keys(rules.includes).filter(id => !(groupIdOf(id) in rules.groups))
+  if (groupNames.length === 0 && ids.length === 0) return
+  const subId = cache.subscription.id
+  await setBusy($, { cost: true })
+  try {
+    // one body file per project: the query changes every time, a hashed name would pile files up
+    const bodyPath = `${await dataDir($)}/${project.key}.cost-query.json`
+    await $.fs.write(bodyPath, JSON.stringify(costBody(groupNames, ids, now)))
+    const r = await costPages($, costUrl(subId), bodyPath)
+    if (!r.ok) {
+      if (r.error.code === 'throttled') costLoop.throttledUntil = r.error.retryAt ?? now + 30 * 60_000
+      else costLoop.backoffUntil = now + 60 * 60_000
+      const error = r.error
+      return await patchCache($, subId, c => ({ ...c, errors: { ...c.errors, cost: error } }))
+    }
+    costLoop.backoffUntil = 0
+    costLoop.throttledUntil = 0
+    const costs = parseCost(r.json, now, cache.cost?.currency)
+    await patchCache($, subId, c => {
+      const resources = Object.fromEntries(Object.entries(c.resources)
+        .map(([id, card]) => [id, { ...card, cost: costs.byId[id] ?? { month: 0, prevMonth: null } }]))
+      const { cost: _old, ...errors } = c.errors
+      return { ...c, resources, errors, cost: { currency: costs.currency, ...costs.total }, costAt: now }
+    })
+  } catch {
+    // shortcut: an unexpected failure only skips this read; the next tick or press tries again
+  } finally {
+    await setBusy($, { cost: false })
+  }
+}
+
+/**
+ * The week's changes in the project: one activity-log call per group, one per resource included
+ * from elsewhere; every 15 min, or on opening a card when older than 2 min. A refusal waits on its
+ * own memory (Retry-After, else 15 min) and never touches the state loop.
+ */
+async function readActivity($: EngineInterface, isOpening = false): Promise<void> {
+  const [rules, cache] = await Promise.all([read($, rulesAtom), read($, cacheAtom)])
+  if (rules === null || cache === null || activityLoop.isReading) return
+  const now = await $.clock.now()
+  if (!activityDue(now, cache.activityAt, isOpening) || now < activityLoop.backoffUntil) return
+  const targets = [
+    ...Object.keys(rules.groups).map(g => ({ group: g.slice(g.lastIndexOf('/') + 1) })),
+    ...Object.keys(rules.includes).filter(id => !(groupIdOf(id) in rules.groups)).map(id => ({ id })),
+  ]
+  if (targets.length === 0) return
+  const subId = cache.subscription.id
+  activityLoop.isReading = true
+  try {
+    const rows: unknown[] = []
+    let failed: AzError | undefined
+    let answered = 0
+    let throttledUntil = 0
+    let isUntimed = false
+    // one target refused (a group without access) keeps the others' changes, with its error beside them
+    for (const target of targets) {
+      const r = await runAz($, activityArgs(target, subId), 120_000)
+      if (!r.ok) {
+        failed ??= r.error
+        // the longest wait any throttled target asked for, whatever came first; an error with no
+        // wait of its own (a refusal, or a 429 without Retry-After) waits 15 min
+        if (r.error.code === 'throttled' && r.error.retryAt !== undefined) throttledUntil = Math.max(throttledUntil, r.error.retryAt)
+        else if (r.error.code === 'throttled') throttledUntil = Math.max(throttledUntil, now + 15 * 60_000)
+        else isUntimed = true
+        continue
+      }
+      answered += 1
+      if (Array.isArray(r.json)) rows.push(...(r.json as unknown[]))
+    }
+    if (answered === 0 && failed !== undefined) {
+      activityLoop.backoffUntil = isUntimed ? Math.max(throttledUntil, now + 15 * 60_000) : throttledUntil
+      const error = failed
+      return await patchCache($, subId, c => ({ ...c, errors: { ...c.errors, activity: error } }))
+    }
+    // a target that answered 429 is not asked again before its wait, the others with it
+    activityLoop.backoffUntil = throttledUntil
+    const activity = parseActivity(rows, now)
+    await patchCache($, subId, c => {
+      const { activity: _old, ...errors } = c.errors
+      return { ...c, errors: failed === undefined ? errors : { ...errors, activity: failed }, activity, activityAt: now }
+    })
+  } catch {
+    // shortcut: an unexpected failure only skips this read; the next tick tries again
+  } finally {
+    activityLoop.isReading = false
+  }
+}
+
 /** Takes a group's cards out of the photo (but those included one by one). */
 async function dropGroupCards($: EngineInterface, groupId: string, rules: AzRules): Promise<void> {
   // the «Uso rg-x» line goes even when there is no photo yet (the first read failed)
@@ -434,6 +569,9 @@ async function runKey($: EngineInterface, action: PaneAction, arg: string | unde
     if (action === 'scan') return await scanProject($)
     if (action === 'reset-rules') return await startOver($)
     if (action === 'undo-auto') return await undoAuto($)
+    if (action === 'refresh-cost') return await readCosts($, true)
+    // the pane has already toggled the row (this runs after its press): read only on opening
+    if (action === 'open') return (await read($, uiAtom)).openCard === arg ? await readActivity($, true) : undefined
     if (arg === undefined) return
     if (action === 'refresh') return await refreshOne($, arg)
     if (action === 'add') return await includeResource($, arg)
@@ -443,7 +581,6 @@ async function runKey($: EngineInterface, action: PaneAction, arg: string | unde
     if (action === 'dismiss') return await dismissSuggestion($, arg)
     if (action === 'add-group') return await addGroup($, arg)
     if (action === 'remove-group') return await removeGroup($, arg)
-    // 'open' (details on demand) and 'refresh-cost' arrive with later stages
   } catch {
     // shortcut: an action never throws to the pane; its outcome (or none) is in state
   }
@@ -466,11 +603,21 @@ async function tick($: EngineInterface): Promise<void> {
   if ((await read($, rulesAtom)) !== null || (await read($, healthAtom)).rulesMode !== 'ok') await savedRules($)
   const now = await $.clock.now()
   const placed = (await $.ui.panes()).some(p => p.id === PANE && p.isPlaced)
+  // costs and activities ride the same tick but not its rhythm: only the session that reads Azure
+  if (placed && (await read($, healthAtom)).isLeaseHolder) {
+    void readCosts($)
+    void readActivity($)
+  }
   let cache = await read($, cacheAtom)
   const disk = await loadCache($, project.key)
-  if (disk !== null && (disk.stateAt ?? 0) > (cache?.stateAt ?? 0)) {
-    cache = disk
-    await change($, cacheAtom, () => disk)
+  // the file another session saved: its state when newer, and on their own its costs and activities
+  // when newer (a press there, while this session runs the Updates)
+  if (disk !== null) {
+    const merged = (disk.stateAt ?? 0) > (cache?.stateAt ?? 0) ? keepNewerReads(disk, cache) : cache === null ? null : keepNewerReads(cache, disk)
+    if (merged !== null && merged !== cache) {
+      await change($, cacheAtom, current => keepNewerReads(merged, current))
+      cache = await read($, cacheAtom)
+    }
   }
   const lastInputAt = Math.max((await read($, uiAtom)).lastInputAt, loop.startedAt)
   const nextAutoAt = !placed || loop.isLoginStopped ? null
@@ -489,19 +636,30 @@ async function tick($: EngineInterface): Promise<void> {
 async function startLoop($: EngineInterface): Promise<void> {
   loop.cancel?.()
   loop.startedAt = await $.clock.now()
+  costLoop.backoffUntil = 0
+  costLoop.throttledUntil = 0
+  activityLoop.backoffUntil = 0
+  activityLoop.isReading = false
   loop.cancel = $.clock.every(TICK_MS, () => { void tick($).catch(() => undefined) }).cancel
 }
 
 /** Session start: who we are, the saved rules and photo into state, Scan on a first open, then the timer. */
 export async function boot($: EngineInterface): Promise<void> {
   try {
+    // $.state outlives a reload: the desktop app moves a spare session (booted in a temporary
+    // folder) to the folder opened, and what that load left in progress will never end here
+    await setBusy($, { scan: false, update: false, cost: false, ids: [] })
+    await change($, suggestionsAtom, () => [])
+    await change($, foundAtom, () => [])
+    await change($, autoAddedAtom, () => null)
     const loaded = await loadRules($, await resolveProject($))
     const project = { ...loaded.project, key: loaded.key }
     await change($, projectAtom, () => project)
     await change($, rulesAtom, () => loaded.rules)
-    await setHealth($, { rulesMode: loaded.mode })
+    await setHealth($, { rulesMode: loaded.mode, error: undefined })
+    // the photo of this folder, or none (never the one the previous folder left)
     const cache = await loadCache($, loaded.key)
-    if (cache !== null) await change($, cacheAtom, () => cache)
+    await change($, cacheAtom, () => cache)
     await startLoop($)
     if (loaded.rules === null && loaded.mode === 'ok') await scanProject($, true)
   } catch {

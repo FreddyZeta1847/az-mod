@@ -130,3 +130,19 @@ test('unclear triggers update', async ($, on) => {
   await w.waitFor(() => w.runs.some(a => a[1] === 'rest'))
   expect((w.seen.events ?? []).length).toBe(0)
 })
+
+test('n3 the start of a command is taken when it runs, not while it waits for an approval', async ($, on) => {
+  const w = startWorld(on)
+  // beneath the mod: the permission step, where the person takes 20 minutes to approve
+  on('tool.check', async (_$, e, next) => {
+    await w.clock.advance(20 * 60_000)
+    return next(e)
+  })
+  await w.start($)
+  await $.tool.call({ tool: 'Bash', command: 'az containerapp update -n app-match -g rg-demo-suite' })
+  await w.waitFor(() => (w.seen.events ?? []).some(e => e.verb === 'update'))
+  const event = (w.seen.events ?? []).find(e => e.verb === 'update') as AzEvent
+  expect(event.startedAt).toBeDefined()
+  // started after the approval: close to its end, not 20 minutes before it
+  expect(event.at - (event.startedAt ?? 0) < 60_000).toBe(true)
+})

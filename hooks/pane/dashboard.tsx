@@ -3,7 +3,8 @@
  * group · subscription, Update, Scan, + Aggiungi), banners (az login/missing, rules
  * read-only/broken, name conflict, stale data, group adopted by itself with «Annulla»),
  * suggestions, the status donut with its legend, the resources grouped by type (one row
- * each, opening on two columns of facts), then «Nascoste» and the Azure-created count.
+ * each, opening on two columns of facts, its cost at the end), then «Nascoste» and the Azure-created count.
+ * Under the summary: costs, «Da guardare» and recent activity (built in extras.tsx).
  * Reads Raccolta's state atoms and writes only `ui` (through interactions.tsx).
  * The terminal has no Svg: there the same tree draws dots as colored «●» text and no donut.
  */
@@ -13,6 +14,7 @@ import type { EngineInterface, RenderChildren, RenderInput } from 'claude-code'
 import type { AzCard, AzStatus, AzSuggestion, AzUi } from '../../types'
 
 import { isHidden, keyFor } from '../contract'
+import { activityBox, costBox, rowCost, watchBox } from './extras'
 import { handlers, picker } from './interactions'
 
 // The engine reads an atom only when it is declared in the file that reads it, so these
@@ -26,6 +28,7 @@ const busyAtom = atom({ plugin: 'az-mod', key: 'busy' } as const,
   { scan: false, update: false, cost: false, ids: [] }, { shape: 'busy-1' })
 const healthAtom = atom({ plugin: 'az-mod', key: 'health' } as const,
   { az: 'ok', isLeaseHolder: false, nextAutoAt: null, rulesMode: 'ok' }, { shape: 'health-1' })
+const eventsAtom = atom({ plugin: 'az-mod', key: 'events' } as const, [], { shape: 'events-1' })
 const foundAtom = atom({ plugin: 'az-mod', key: 'found' } as const, [], { shape: 'found-1' })
 const uiAtom = atom({ plugin: 'az-mod', key: 'ui' } as const,
   { lastInputAt: 0, openCard: null, closed: [], showAuto: false, showHidden: false, isAdding: false }, { shape: 'ui-1' })
@@ -63,9 +66,9 @@ export async function drawDashboard($: EngineInterface, e: RenderInput<'Pane'>) 
   const els = $.ui.resolve(e)
   const { Box, Text, Button, Link } = els
   const Svg = 'Svg' in els ? els.Svg : undefined
-  const [project, rules, cache, suggestions, autoAdded, busy, health, ui, now, found] = await Promise.all([
+  const [project, rules, cache, suggestions, autoAdded, busy, health, ui, now, found, events] = await Promise.all([
     read($, projectAtom), read($, rulesAtom), read($, cacheAtom), read($, suggestionsAtom), read($, autoAddedAtom),
-    read($, busyAtom), read($, healthAtom), read($, uiAtom), $.clock.now(), read($, foundAtom),
+    read($, busyAtom), read($, healthAtom), read($, uiAtom), $.clock.now(), read($, foundAtom), read($, eventsAtom),
   ])
   const setUi = async (change: (u: AzUi) => Partial<AzUi>): Promise<void> => {
     const at = await $.clock.now()
@@ -173,6 +176,14 @@ export async function drawDashboard($: EngineInterface, e: RenderInput<'Pane'>) 
     </Box>
   )
 
+  // ---- costs, warnings, activities (extras.tsx): only once there is a photo with resources
+  const currency = cache?.cost?.currency ?? 'EUR'
+  const extras = cache === null || visible.length === 0 ? [] : [
+    costBox(els, Svg, act, cache, visible, busy.cost, now),
+    watchBox(els, Svg, visible),
+    activityBox(els, Svg, cache, events, now),
+  ]
+
   // ---- rows
   const facts = (c: AzCard) => (
     <Box key={`facts-${c.id}`} flexDirection="row" flexWrap="wrap" paddingLeft={3} paddingTop={1}>
@@ -193,6 +204,7 @@ export async function drawDashboard($: EngineInterface, e: RenderInput<'Pane'>) 
   const row = (c: AzCard) => {
     // a failed row is open by itself until the user closes it (decision «Quali informazioni in più mostrare»)
     const isOpen = ui.openCard === c.id || (c.status === 'failed' && !(ui.closed ?? []).includes(c.id))
+    const cost = rowCost(c, currency)
     return (
       <Box key={`row-${c.id}`} flexDirection="column" paddingX={1} backgroundColor={isOpen ? C.surface2 : C.bg} hover={{ backgroundColor: C.surface2 }}>
         <Box flexDirection="row" alignItems="center" gap={1}>
@@ -201,6 +213,7 @@ export async function drawDashboard($: EngineInterface, e: RenderInput<'Pane'>) 
           <Box flexGrow={1}>
             <Text color={c.status === 'failed' ? STATUS.failed.color : C.muted} wrap="truncate-end">{keyFact(c)}</Text>
           </Box>
+          {cost === '' ? null : <Text color={C.faint}>{cost}</Text>}
         </Box>
         {isOpen ? facts(c) : null}
       </Box>
@@ -261,6 +274,7 @@ export async function drawDashboard($: EngineInterface, e: RenderInput<'Pane'>) 
       {ui.isAdding ? picker(els, act, found) : null}
       {chips}
       {summary}
+      {extras}
       {empty}
       {resources}
       {groupsLine}
